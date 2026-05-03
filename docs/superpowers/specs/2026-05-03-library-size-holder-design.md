@@ -116,13 +116,7 @@ The downstream `SettingsUiState.totalStorageBytes: Long` field stays; only its s
 
 ### 4. Module dependency
 
-`feature/settings/build.gradle.kts` adds:
-
-```kotlin
-implementation(project(":data:download"))
-```
-
-(Mirroring what `:feature:home` already added on the v0.9.7 branch for direct `FileOrganizer` access — though after this refactor `:feature:home` only needs the holder, not `FileOrganizer` itself, so the dep is still justified for symmetry.)
+**No gradle changes needed.** Both `feature/settings/build.gradle.kts:20` and `feature/home/build.gradle.kts:14` already declare `implementation(project(":data:download"))` (the former added when MoveLibraryCoordinator was wired; the latter added on the v0.9.7 branch for direct `FileOrganizer` access). After this refactor, `:feature:home` only needs the holder — but the dep stays for symmetry and any future direct `FileOrganizer` use.
 
 `:data:download` already depends on `:core:data` (for `MusicRepository`), so the holder's `MusicRepository` injection works without extra plumbing.
 
@@ -133,9 +127,9 @@ implementation(project(":data:download"))
 | `data/download/src/main/kotlin/com/stash/data/download/files/LibrarySizeHolder.kt` (new) | The singleton class, ~35 LOC including KDoc |
 | `feature/home/src/main/kotlin/com/stash/feature/home/HomeViewModel.kt` | Drop local `MutableStateFlow` + `init` collector; drop `FileOrganizer` constructor param; inject `LibrarySizeHolder`; use `librarySizeHolder.size` in `musicDataFlow` combine. Net `-22 LOC` |
 | `feature/settings/src/main/kotlin/com/stash/feature/settings/SettingsViewModel.kt` | Add `LibrarySizeHolder` constructor param; replace combine index 3 source; update value-extraction cast. ~5 LOC modified |
-| `feature/settings/build.gradle.kts` | Add `implementation(project(":data:download"))` |
+| `feature/settings/build.gradle.kts` | **No change** — `implementation(project(":data:download"))` already declared at line 20 |
 
-Net: 1 new file, 3 modified files, ~+18 LOC overall (new file +35; HomeViewModel −22; SettingsViewModel +5; gradle +1).
+Net: 1 new file, 2 modified files, ~+17 LOC overall (new file +35; HomeViewModel −22; SettingsViewModel +5).
 
 ## Error handling
 
@@ -145,7 +139,7 @@ Net: 1 new file, 3 modified files, ~+18 LOC overall (new file +35; HomeViewModel
 | Walker throws | `runCatching` swallows; `scan` returns previous value. UI shows the last good number. Logged via `Log.w` in `FileOrganizer`. |
 | `MusicRepository.getTrackCount()` upstream errors | The `Flow` chain propagates; `scan` doesn't run; `stateIn` keeps the last `initialValue` or last successful emission. No crash. |
 | All ViewModels unsubscribe | Walker pauses 5 s after last subscribe via `WhileSubscribed(5_000)`. Next subscribe re-collects from upstream and walks again on the next track-count change. |
-| App backgrounded → foregrounded | If <5 s, walker keeps running. If >5 s, walker paused but `stateIn` retained its last value, so when ViewModels re-collect they immediately see the previous number. Walker re-runs only on next track-count change. |
+| App backgrounded → foregrounded | If <5 s, walker keeps running and `scan`'s last-good accumulator is preserved. If >5 s, the upstream `Flow` chain is fully cancelled. On re-subscribe `stateIn`'s `value` cache hands the previous number to the UI **immediately** (no flash on initial render), but `scan` itself restarts from `LibrarySizeBreakdown(0,0,0)` — meaning the **next** time `getTrackCount` ticks before the walker finishes, the UI could briefly see 0 again. In practice walks are infrequent and `getTrackCount` doesn't tick on backgrounding alone, so this is rare. The persistent-cache fix (DataStore) is out of scope. |
 
 ## Risks
 
