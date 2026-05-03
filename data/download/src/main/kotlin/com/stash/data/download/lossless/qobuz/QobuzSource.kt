@@ -98,6 +98,16 @@ class QobuzSource @Inject constructor(
             return null
         }
 
+        // Album art — Qobuz returns multiple sizes on `track.album.image`.
+        // Prefer `large` (~600px); fall back to `thumbnail` then `small`
+        // so a thinly-populated catalog row still produces something.
+        // `null` propagates to the download pipeline which then has a
+        // chance to fall through to its other art-resolution paths.
+        val albumImage = best.first.album?.image
+        val artUrl = albumImage?.large
+            ?: albumImage?.thumbnail
+            ?: albumImage?.small
+
         return SourceResult(
             sourceId = id,
             downloadUrl = download.url,
@@ -118,6 +128,7 @@ class QobuzSource @Inject constructor(
             ),
             confidence = best.second,
             sourceTrackId = best.first.id.toString(),
+            coverArtUrl = artUrl,
         )
     }
 

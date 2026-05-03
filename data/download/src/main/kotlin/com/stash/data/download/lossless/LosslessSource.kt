@@ -123,6 +123,20 @@ data class SourceResult(
      * lookups; not load-bearing for download.
      */
     val sourceTrackId: String? = null,
+
+    /**
+     * Album art URL surfaced by the source's catalog API. The download
+     * pipeline persists this to `tracks.album_art_url` (fill-only-if-blank
+     * semantics) so FLAC tracks show artwork in lists / now-playing the
+     * same way YouTube-pathway tracks do. `null` when the source's
+     * response had no usable image — the pipeline falls back to its
+     * existing Last.fm / generic resolution where applicable.
+     *
+     * Sources should pick the highest reasonable size (Qobuz's `large`
+     * is ~600px; bandcamp's `art_large` is similar). Coil downsamples
+     * client-side as needed.
+     */
+    val coverArtUrl: String? = null,
 )
 
 /**

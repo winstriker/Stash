@@ -341,6 +341,21 @@ class DownloadManager @Inject constructor(
             TAG,
             "Lossless downloaded (${match.sourceId}): ${track.artist} - ${track.title} → ${committed.filePath}",
         )
+
+        // Persist album art surfaced by the source's catalog API.
+        // fillMissingAlbumArtUrl is fill-only-if-blank, so a Spotify-
+        // sourced track that already has artwork keeps it; Stash-Discover
+        // tracks that came in metadata-less get the Qobuz image. Failure
+        // here is non-fatal — the file is on disk and playable; only the
+        // visual is degraded.
+        match.coverArtUrl?.let { url ->
+            runCatching {
+                trackDao.fillMissingAlbumArtUrl(track.id, url)
+            }.onFailure { e ->
+                Log.w(TAG, "lossless: fillMissingAlbumArtUrl failed for ${track.id}: ${e.message}")
+            }
+        }
+
         emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
         return TrackDownloadResult.Success(committed.filePath)
     }

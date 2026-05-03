@@ -252,11 +252,19 @@ class TrackDownloadWorker @AssistedInject constructor(
                                     // duration_ms=0.
                                     val meta = audioDurationExtractor.extract(outcome.filePath)
                                     if (meta != null) {
-                                        // Format + bitrate: the source-of-truth for
-                                        // Library Health. MMR can return zero bitrate
-                                        // for some containers — only write when we
-                                        // got something credible.
-                                        if (meta.format != "unknown" && meta.bitrateKbps > 0) {
+                                        // Format: source-of-truth for Library Health.
+                                        // Write whenever the codec is known, even when
+                                        // MMR couldn't compute a bitrate — variable-
+                                        // bitrate codecs (FLAC) routinely return
+                                        // bitrate=0 from MMR, and the prior gate
+                                        // `bitrateKbps > 0` silently dropped the
+                                        // format write for every FLAC download,
+                                        // leaving file_format stuck at the legacy
+                                        // 'opus' default. The DAO writes both columns
+                                        // in one statement; a 0 quality value is
+                                        // accepted and means "unknown" to readers
+                                        // (Library Health renders it as `—`).
+                                        if (meta.format != "unknown") {
                                             runCatching {
                                                 trackDao.setFormatAndQuality(
                                                     trackId = queueItem.trackId,
