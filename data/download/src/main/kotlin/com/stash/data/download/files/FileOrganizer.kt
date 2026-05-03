@@ -76,6 +76,39 @@ class FileOrganizer @Inject constructor(
         musicDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
 
     /**
+     * Total storage consumed by lossless audio files in the internal music
+     * directory. Filters by file extension (.flac/.alac/.wav/.ape/.tta/
+     * .wv/.aiff) — same set the Library screen's "FLAC" filter recognises.
+     *
+     * Read from disk rather than the DB's `file_size_bytes` column so it's
+     * accurate regardless of whether legacy rows have the column populated.
+     * Like [getTotalStorageBytes], does not include SAF-targeted tracks.
+     */
+    fun getLosslessStorageBytes(): Long =
+        musicDir.walkTopDown()
+            .filter { it.isFile && it.extension.lowercase() in LOSSLESS_EXTENSIONS }
+            .sumOf { it.length() }
+
+    /**
+     * Count of lossless files actually present on disk in the internal
+     * music directory. Same disk-truth approach as [getLosslessStorageBytes];
+     * insulates the Home stat from `file_format` mis-classification on
+     * legacy DB rows. Renders alongside total Tracks count on Home.
+     */
+    fun getLosslessFileCount(): Int =
+        musicDir.walkTopDown()
+            .count { it.isFile && it.extension.lowercase() in LOSSLESS_EXTENSIONS }
+
+    private companion object {
+        // Mirrors `LibraryViewModel.LOSSLESS_CODECS` and
+        // `core/ui/.../FlacBadge.kt`. Kept duplicated rather than reaching
+        // across the data → ui boundary; the set is short and stable.
+        private val LOSSLESS_EXTENSIONS = setOf(
+            "flac", "alac", "wav", "ape", "tta", "wv", "aiff",
+        )
+    }
+
+    /**
      * Moves [tempFile] (written by yt-dlp to the cache) into its final
      * destination and returns the path/URI to store in
      * [com.stash.core.model.Track.filePath]. Deletes [tempFile] on success.

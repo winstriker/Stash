@@ -11,6 +11,10 @@ import com.stash.core.data.repository.MusicRepository
 import com.stash.core.data.sync.toDisplayStatus
 import com.stash.core.media.PlayerRepository
 import com.stash.core.model.MusicSource
+import com.stash.data.download.files.FileOrganizer
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flowOn
 import com.stash.core.model.Playlist
 import com.stash.core.model.PlaylistType
 import com.stash.core.model.SyncDisplayStatus
@@ -46,6 +50,7 @@ class HomeViewModel @Inject constructor(
     private val lastFmSessionPreference: LastFmSessionPreference,
     private val lastFmCredentials: LastFmCredentials,
     private val listeningEventDao: ListeningEventDao,
+    private val fileOrganizer: FileOrganizer,
 ) : ViewModel() {
 
     /**
@@ -68,12 +73,26 @@ class HomeViewModel @Inject constructor(
     /**
      * Combines the four Room-backed data flows into a single intermediate holder,
      * keeping the top-level combine at 5 or fewer flows for type safety.
+     *
+     * `storageBytes` and `flacStorageBytes` (in [sourceCountsFlow]) are computed
+     * from the filesystem via [FileOrganizer], NOT from the DB's
+     * `file_size_bytes` column. The column is unreliable on legacy libraries
+     * — many older download paths left it at 0 — and the backfill that's
+     * supposed to recover it has been failing because of orphaned rows + path
+     * format edge cases. Walking the music dir is disk truth and never lies.
+     * The walk is keyed on track count change (a cheap proxy for "library
+     * may have changed"), debounced via Room's own change-distinct semantics,
+     * and offloaded to [Dispatchers.IO]. ~50–200 ms per walk for 3000 files;
+     * runs only when the count actually changes.
      */
     private val musicDataFlow = combine(
         musicRepository.getAllPlaylists(),
         musicRepository.getRecentlyAdded(20),
         musicRepository.getTrackCount(),
-        musicRepository.getTotalStorageBytes(),
+        musicRepository.getTrackCount()
+            .distinctUntilChanged()
+            .map { fileOrganizer.getTotalStorageBytes() }
+            .flowOn(Dispatchers.IO),
     ) { playlists, recentlyAdded, trackCount, storageBytes ->
         MusicData(playlists, recentlyAdded, trackCount, storageBytes)
     }
@@ -81,8 +100,14 @@ class HomeViewModel @Inject constructor(
     private val sourceCountsFlow = combine(
         musicRepository.getSpotifyDownloadedCount(),
         musicRepository.getYouTubeDownloadedCount(),
-        musicRepository.getFlacTrackCount(),
-        musicRepository.getFlacStorageBytes(),
+        musicRepository.getTrackCount()
+            .distinctUntilChanged()
+            .map { fileOrganizer.getLosslessFileCount() }
+            .flowOn(Dispatchers.IO),
+        musicRepository.getTrackCount()
+            .distinctUntilChanged()
+            .map { fileOrganizer.getLosslessStorageBytes() }
+            .flowOn(Dispatchers.IO),
     ) { spotify, youtube, flac, flacBytes ->
         SourceCounts(
             spotify = spotify,
