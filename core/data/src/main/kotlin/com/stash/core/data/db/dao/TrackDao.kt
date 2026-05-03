@@ -448,12 +448,37 @@ interface TrackDao {
     @Query("SELECT COALESCE(SUM(file_size_bytes), 0) FROM tracks WHERE is_downloaded = 1")
     fun getTotalStorageBytes(): Flow<Long>
 
-    /** Count of downloaded FLAC tracks (reactive). */
-    @Query("SELECT COUNT(*) FROM tracks WHERE is_downloaded = 1 AND file_format = 'flac'")
+    /**
+     * Count of downloaded lossless tracks (reactive). Mirrors the codec
+     * set used by the Library screen's "FLAC" filter (see
+     * `LibraryViewModel.LOSSLESS_CODECS` and `core/ui/.../FlacBadge.kt`)
+     * so Home and Library agree on what counts as lossless. Case-
+     * insensitive because some writers (e.g. `LocalImportCoordinator`
+     * which writes the raw file extension) can produce uppercase or
+     * mixed-case format strings — this query catches them all.
+     */
+    @Query(
+        """
+        SELECT COUNT(*)
+        FROM tracks
+        WHERE is_downloaded = 1
+          AND LOWER(file_format) IN ('flac', 'alac', 'wav', 'ape', 'tta', 'wv', 'aiff')
+        """
+    )
     fun getFlacCount(): Flow<Int>
 
-    /** Sum of file sizes (bytes) for downloaded FLAC tracks (reactive). */
-    @Query("SELECT COALESCE(SUM(file_size_bytes), 0) FROM tracks WHERE is_downloaded = 1 AND file_format = 'flac'")
+    /**
+     * Sum of file sizes (bytes) for downloaded lossless tracks (reactive).
+     * Codec set + case-insensitivity mirror [getFlacCount] — see KDoc there.
+     */
+    @Query(
+        """
+        SELECT COALESCE(SUM(file_size_bytes), 0)
+        FROM tracks
+        WHERE is_downloaded = 1
+          AND LOWER(file_format) IN ('flac', 'alac', 'wav', 'ape', 'tta', 'wv', 'aiff')
+        """
+    )
     fun getFlacStorageBytes(): Flow<Long>
 
     /** Count of downloaded tracks from Spotify. */
