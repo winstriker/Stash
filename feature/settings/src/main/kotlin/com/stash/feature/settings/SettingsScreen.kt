@@ -1018,7 +1018,7 @@ private fun LastFmSection(
                             contentColor = MaterialTheme.colorScheme.primary,
                         ),
                     ) {
-                        Text("Connect")
+                        Text("Connect Last.fm")
                     }
                 }
             }
