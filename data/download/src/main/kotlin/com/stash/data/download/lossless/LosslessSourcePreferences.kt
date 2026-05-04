@@ -3,6 +3,7 @@ package com.stash.data.download.lossless
 import android.content.Context
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -39,9 +40,9 @@ class LosslessSourcePreferences @Inject constructor(
 ) {
     private val priorityKey = stringPreferencesKey("priority_order")
     private val minQualityKey = stringPreferencesKey("min_quality")
-    private val enabledKey = androidx.datastore.preferences.core.booleanPreferencesKey("enabled")
+    private val enabledKey = booleanPreferencesKey("enabled")
     private val captchaCookieKey = stringPreferencesKey("squid_wtf_captcha_verified_at")
-    private val bannerDismissedKey = androidx.datastore.preferences.core.booleanPreferencesKey("home_banner_dismissed")
+    private val bannerDismissedKey = booleanPreferencesKey("home_banner_dismissed")
 
     /**
      * Master switch for the lossless-source pipeline. When false, the
@@ -116,8 +117,8 @@ class LosslessSourcePreferences @Inject constructor(
         prefs[bannerDismissedKey] ?: false
     }
 
-    suspend fun setBannerDismissed(value: Boolean) {
-        context.losslessDataStore.edit { prefs -> prefs[bannerDismissedKey] = value }
+    suspend fun setBannerDismissed(dismissed: Boolean) {
+        context.losslessDataStore.edit { prefs -> prefs[bannerDismissedKey] = dismissed }
     }
 
     /**
