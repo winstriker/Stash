@@ -14,7 +14,7 @@ Stash is an offline-first Android music player that syncs your liked songs, play
 
 ## Features
 
-- **Offline everything** — tracks download as high-quality FLAC audio, playable without internet
+- **Offline everything** — tracks download as high-quality lossless audio
 - **Bulletproof matching** — finds the right version of tracks 99% of the time
 - **Custom playlists** — create your own playlists and save tracks to them from anywhere.
 - **Spotify & YT sync preferences** — choose exactly which playlists, liked songs, daily mixes, and discovery mixes to sync. Individual toggles for each. Don't want Daily Mix 3? Turn it off.
