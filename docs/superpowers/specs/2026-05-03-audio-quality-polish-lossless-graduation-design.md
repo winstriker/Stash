@@ -90,7 +90,7 @@ Mirrors the existing Last.fm prompt at `HomeViewModel:148–164` exactly. Same c
 
 **Files touched:**
 - `data/download/.../lossless/LosslessSourcePreferences.kt` — add `bannerDismissed: Flow<Boolean>` (default `false`) + `setBannerDismissed(value: Boolean)` setter, alongside existing `enabled` and `captchaCookieValue` keys. No new DataStore file.
-- `feature/home/.../HomeUiState.kt` — add `losslessPrompt: LosslessPromptState? = null` field.
+- `feature/home/.../HomeUiState.kt` — add `losslessPrompt: LosslessPromptState? = null` field. `LosslessPromptState` is a `data object` (no fields — its mere presence in the UI state signals "show the banner"). Defined alongside the existing `LastFmPromptState` in the same file.
 - `feature/home/.../HomeViewModel.kt` — add `losslessPromptFlow`, fold it into the existing `authStateFlow` combine (the established 3-input bundling point — its KDoc reads *"Bundled so the top-level combine stays at 5 inputs"*; the top-level combine is already at the 5-input non-vararg ceiling and cannot grow). Extend `AuthInfo` with a `losslessPrompt: LosslessPromptState?` field. Add `dismissLosslessBanner()` method. Add `private val losslessPrefs: LosslessSourcePreferences` constructor param.
 - `feature/home/.../HomeScreen.kt` — render the banner at the top of the scrollable Column, directly under the sync card, when `uiState.losslessPrompt != null`. Tap → `onSetUpLossless()` callback. `×` icon → `viewModel::dismissLosslessBanner`.
 - `app/.../navigation/StashNavHost.kt` — wire `onSetUpLossless = { navController.navigate(SettingsRoute) }`.
