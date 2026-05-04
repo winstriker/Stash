@@ -45,9 +45,9 @@ The one surviving candidate is **Monochrome** (`monochrome-music/monochrome`, 3.
 Mirrors the shape of the existing `QobuzApiClient.kt`:
 
 - `@Singleton` class with `@Inject` constructor taking `OkHttpClient` (from `:core:network`).
-- `internal var httpClient: OkHttpClient` — derived client built from the shared client (`sharedClient.newBuilder().build()`). No interceptor needed (Monochrome's API is unauthenticated for callers; the operator's Tidal token is server-side).
-- `internal var baseUrl: String = DEFAULT_BASE_URL` — test seam. `companion object { const val DEFAULT_BASE_URL = "https://api.monochrome.tf" }`.
-- `internal var json: Json = DEFAULT_JSON` — `Json { ignoreUnknownKeys = true; coerceInputValues = true }`. Defensive against upstream API additions.
+- `internal var httpClient: OkHttpClient` — test seam (test-only assignment). Derived client built from the shared client (`sharedClient.newBuilder().build()`). No interceptor needed (Monochrome's API is unauthenticated for callers; the operator's Tidal token is server-side).
+- `internal var baseUrl: String = DEFAULT_BASE_URL` — test seam (test-only assignment). `companion object { const val DEFAULT_BASE_URL = "https://api.monochrome.tf" }`.
+- `internal var json: Json = DEFAULT_JSON` — test seam (test-only assignment). `Json { ignoreUnknownKeys = true; coerceInputValues = true }`. Defensive against upstream API additions.
 
 **Endpoints implemented** (from the probe of `uimaxbai/hifi-api`):
 
@@ -105,7 +105,7 @@ data class TidalStreamManifest(
 )
 ```
 
-Plus a private `coverIdToUrl(cover: String, size: String = "1280x1280"): String` helper:
+Plus a private `coverIdToUrl(cover: String, size: String = "1280x1280"): String?` helper:
 - Tidal cover IDs are dash-separated (`"abc-def-ghi"`).
 - URL pattern: `https://resources.tidal.com/images/abc/def/ghi/1280x1280.jpg` (replace dashes with slashes, append size + `.jpg`).
 - Returns null if the cover string format doesn't match.
