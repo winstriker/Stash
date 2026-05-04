@@ -79,7 +79,7 @@ class LibraryViewModel @Inject constructor(
         viewModelScope.launch {
             val firstSnapshot = musicRepository.getAllTracks().first()
             val hasLossless = firstSnapshot.any {
-                it.fileFormat?.lowercase() in LOSSLESS_CODECS
+                it.fileFormat.lowercase() in LOSSLESS_CODECS
             }
             if (hasLossless && _controls.value.sourceFilter == SourceFilter.ALL) {
                 _controls.update { it.copy(sourceFilter = SourceFilter.FLAC) }
