@@ -122,16 +122,18 @@ class LosslessSourcePreferences @Inject constructor(
     }
 
     /**
-     * Emits the user's source-id priority order. Empty list means "no
-     * order set" — registry treats this as "use registration order" so a
-     * fresh install with default sources Just Works.
+     * Emits the user's source-id priority order. Falls back to
+     * [DEFAULT_PRIORITY] when no order has been explicitly saved —
+     * fresh installs get a known, stable resolution order rather than
+     * relying on Hilt registration order.
      */
     val priorityOrder: Flow<List<String>> = context.losslessDataStore.data.map { prefs ->
         prefs[priorityKey]
             ?.split(",")
             ?.map { it.trim() }
             ?.filter { it.isNotEmpty() }
-            ?: emptyList()
+            ?.ifEmpty { DEFAULT_PRIORITY }
+            ?: DEFAULT_PRIORITY
     }
 
     /** One-shot read for callers that want the current value without subscribing. */
@@ -177,5 +179,24 @@ class LosslessSourcePreferences @Inject constructor(
             HIGH_LOSSY -> format.isLossless || format.bitrateKbps >= 256
             ANY -> true
         }
+    }
+
+    companion object {
+        /**
+         * Default priority order used by fresh installs (no DataStore
+         * entry yet). Existing users with explicitly-saved priority
+         * preserve their value.
+         *
+         * Order:
+         * 1. squid_qobuz — Qobuz Hi-Res FLAC via qobuz.squid.wtf (existing
+         *    integration since v0.9.0; proven matching, well-known catalog)
+         * 2. kennyy_qobuz — Qobuz Hi-Res FLAC via qobuz.kennyy.com.br
+         *    (added in v0.9.10; sibling Qobuz-DL proxy, different operator,
+         *    no captcha gate — outages uncorrelated with squid.wtf)
+         */
+        val DEFAULT_PRIORITY: List<String> = listOf(
+            "squid_qobuz",
+            "kennyy_qobuz",
+        )
     }
 }

@@ -383,6 +383,7 @@ class DiffWorker @AssistedInject constructor(
                 )
 
                 val searchQuery = "${trackSnapshot.artist} - ${trackSnapshot.title}"
+                Log.i(TAG, "QueueTrace: DiffWorker.insert track_id=$trackId playlist=${localPlaylist.id} '${trackSnapshot.artist} - ${trackSnapshot.title}'")
                 downloadQueueDao.insert(
                     DownloadQueueEntity(
                         trackId = trackId,

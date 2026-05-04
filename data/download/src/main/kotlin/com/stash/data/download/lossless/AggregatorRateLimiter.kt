@@ -1,5 +1,6 @@
 package com.stash.data.download.lossless
 
+import android.util.Log
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
@@ -49,6 +50,8 @@ class AggregatorRateLimiter @Inject constructor() {
         var blockedUntilMs: Long = 0L,
         var totalAcquires: Long = 0L,
         var totalRateLimited: Long = 0L,
+        /** Timestamps (ms) of recent 429s. Trimmed to last 60s in reportRateLimited. */
+        val rateLimitTimestamps: MutableList<Long> = mutableListOf(),
     )
 
     private val buckets = mutableMapOf<String, Bucket>()
@@ -56,6 +59,24 @@ class AggregatorRateLimiter @Inject constructor() {
     private val mutex = Mutex()
 
     private val defaultConfig = Config()
+
+    init {
+        // Kennyy operator handles traffic from Monochrome's web UI users at
+        // higher rates than the conservative default. Start at 3x the default
+        // (1 token / 3s, burst 4); auto-backoff via reportRateLimited will
+        // ratchet down if the operator's actual threshold is lower.
+        configs["kennyy_qobuz"] = Config(
+            tokensPerSecond = 1.0 / 3.0,   // 1 token / 3 seconds
+            burstCapacity = 4.0,
+            backoff429Ms = 60_000L,        // 1 min pause on 429
+            circuitBreakAfter = 5,
+            circuitBreakDurationMs = 30 * 60_000L, // 30 min
+        )
+    }
+
+    companion object {
+        private const val TAG = "AggregatorRateLimiter"
+    }
 
     /**
      * Override defaults for a specific source. Call once at app startup
@@ -147,8 +168,26 @@ class AggregatorRateLimiter @Inject constructor() {
         mutex.withLock {
             val bucket = bucketFor(sourceId)
             val cfg = configFor(sourceId)
-            bucket.blockedUntilMs = clock.nowMs() + cfg.backoff429Ms
+            val now = clock.nowMs()
+            bucket.blockedUntilMs = now + cfg.backoff429Ms
             bucket.totalRateLimited++
+
+            // Auto-backoff: track 429 timestamps in a rolling 60-second
+            // window. If we cross the threshold (5+ in 60s), halve the
+            // source's effective rate as a self-tuning measure. The system
+            // converges toward the operator's actual threshold rather than
+            // hardcoding our guess.
+            bucket.rateLimitTimestamps.add(now)
+            bucket.rateLimitTimestamps.removeAll { it < now - 60_000L }
+            if (bucket.rateLimitTimestamps.size >= 5) {
+                val newRate = (cfg.tokensPerSecond / 2.0).coerceAtLeast(1.0 / 60.0) // floor at 1/min
+                if (newRate < cfg.tokensPerSecond) {
+                    configs[sourceId] = cfg.copy(tokensPerSecond = newRate)
+                    Log.i(TAG, "AggregatorRateLimiter: $sourceId 429-rate-limited 5+ times in 60s; halving rate to $newRate tokens/sec")
+                    bucket.rateLimitTimestamps.clear()  // reset window after action
+                }
+            }
+
             // 429 also counts as a failure for circuit-breaker purposes —
             // if we keep getting rate-limited, something's structurally
             // wrong (wrong API endpoint, banned IP, etc.) and we should

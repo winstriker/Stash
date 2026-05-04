@@ -82,6 +82,7 @@ class TrackDownloadWorker @AssistedInject constructor(
     }
 
     override suspend fun doWork(): Result {
+        val startedAtMs = System.currentTimeMillis()
         val syncId = inputData.getLong(DiffWorker.KEY_SYNC_ID, -1L)
         if (syncId == -1L) {
             syncStateManager.onError("TrackDownloadWorker: missing sync ID")
@@ -130,6 +131,7 @@ class TrackDownloadWorker @AssistedInject constructor(
             val unqueuedTrackIds = downloadQueueDao.getUnqueuedTrackIds(connectedSources)
             if (unqueuedTrackIds.isNotEmpty()) {
                 Log.i(TAG, "Re-queuing ${unqueuedTrackIds.size} undownloaded tracks with no active queue entry")
+                Log.i(TAG, "QueueTrace: TrackDownloadWorker.requeue track_ids=${unqueuedTrackIds.take(50)}${if (unqueuedTrackIds.size > 50) "...(${unqueuedTrackIds.size - 50} more)" else ""}")
                 val newEntries = unqueuedTrackIds.map { trackId ->
                     com.stash.core.data.db.entity.DownloadQueueEntity(
                         trackId = trackId,
@@ -152,9 +154,16 @@ class TrackDownloadWorker @AssistedInject constructor(
             }
             // Deduplicate (a track could appear in both lists)
             val seen = mutableSetOf<Long>()
-            val pendingItems = (allPending + retryItems).filter { seen.add(it.trackId) }
+            val combined = allPending + retryItems
+            val pendingItems = combined.filter { seen.add(it.trackId) }
             val total = pendingItems.size
             Log.d(TAG, "Download queue: ${allPending.size} pending + ${retryItems.size} retry = $total total (deduped)")
+            // QueueTrace diagnostic: log per-trackId queue-row counts so we can spot duplicate-queueing patterns.
+            val rowsByTrackId = combined.groupBy { it.trackId }
+            val duplicates = rowsByTrackId.filter { it.value.size > 1 }
+            if (duplicates.isNotEmpty()) {
+                Log.w(TAG, "QueueTrace: ${duplicates.size} track_ids have multiple queue rows: ${duplicates.entries.take(10).map { (tid, rows) -> "$tid×${rows.size}" }}${if (duplicates.size > 10) "...(${duplicates.size - 10} more)" else ""}")
+            }
 
             if (total == 0) {
                 // Nothing to download; pass through to finalize.
@@ -399,6 +408,15 @@ class TrackDownloadWorker @AssistedInject constructor(
                     errorMessage = summary.take(1000),
                 )
             }
+
+            val durationMs = System.currentTimeMillis() - startedAtMs
+            val durationSec = durationMs / 1000.0
+            val tpm = if (durationSec > 0) finalDownloaded / (durationSec / 60.0) else 0.0
+            Log.i(
+                TAG,
+                "PerfSummary: ${finalDownloaded} tracks in ${"%.1f".format(durationSec)}s " +
+                    "(${"%.1f".format(tpm)} tracks/min); failed=${finalFailed}",
+            )
 
             return Result.success(
                 workDataOf(

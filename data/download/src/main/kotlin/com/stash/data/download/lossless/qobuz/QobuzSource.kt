@@ -4,6 +4,7 @@ import android.util.Log
 import com.stash.data.download.lossless.AggregatorRateLimiter
 import com.stash.data.download.lossless.AudioFormat
 import com.stash.data.download.lossless.LosslessSource
+import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.RateLimitState
 import com.stash.data.download.lossless.SourceResult
 import com.stash.data.download.lossless.TrackQuery
@@ -35,18 +36,33 @@ class QobuzSource @Inject constructor(
     private val apiClient: QobuzApiClient,
     private val rateLimiter: AggregatorRateLimiter,
     private val captchaExpiredNotifier: CaptchaExpiredNotifier,
+    private val losslessPrefs: LosslessSourcePreferences,
 ) : LosslessSource {
 
     override val id: String = SOURCE_ID
 
     override val displayName: String = "Qobuz (via squid.wtf)"
 
+    /**
+     * Set when an API call returns the captcha-required 403 — used by
+     * isEnabled to skip squid until the user pastes a fresh cookie.
+     * Implicit reset: when the user updates the cookie via Settings,
+     * the new value differs from this one and isEnabled returns true again.
+     */
+    @Volatile private var lastKnownBadCookie: String? = null
+
     override suspend fun isEnabled(): Boolean {
-        // No credentials gate any more — the only reason to skip this
-        // source is the circuit breaker. Rate-limit *back-pressure*
-        // (no tokens right now) is not a reason to flip enabled to
-        // false; acquire() handles that with a brief wait.
-        return !rateLimiter.stateOf(id).isCircuitBroken
+        // Circuit-broken via repeated failures? Skip.
+        if (rateLimiter.stateOf(id).isCircuitBroken) return false
+        // No captcha cookie set? Squid's download endpoint requires it; skip.
+        val currentCookie = losslessPrefs.captchaCookieValueNow()
+        if (currentCookie.isNullOrBlank()) return false
+        // Recently confirmed bad? Skip until user pastes a fresh cookie
+        // (different value will not match lastKnownBadCookie).
+        if (currentCookie == lastKnownBadCookie) {
+            return false
+        }
+        return true
     }
 
     override suspend fun resolve(query: TrackQuery): SourceResult? {
@@ -160,6 +176,11 @@ class QobuzSource @Inject constructor(
                 e.status == 403 && e.message?.contains("Captcha", ignoreCase = true) == true -> {
                     Log.i(TAG, "captcha required — cookie likely expired; skipping without circuit-break")
                     captchaExpiredNotifier.notifyExpired()
+                    // Mark the current cookie as bad so isEnabled() skips squid until
+                    // the user pastes a new value. Prevents wasting ~16s/track on
+                    // doomed squid attempts when the captcha is known stale.
+                    lastKnownBadCookie = losslessPrefs.captchaCookieValueNow()
+                    Log.i(TAG, "squid_qobuz: captcha cookie marked bad; will skip until user updates cookie via Settings")
                 }
                 else -> rateLimiter.reportFailure(id)
             }
