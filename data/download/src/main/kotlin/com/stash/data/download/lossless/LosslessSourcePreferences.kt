@@ -190,13 +190,13 @@ class LosslessSourcePreferences @Inject constructor(
          * Order:
          * 1. squid_qobuz — Qobuz Hi-Res FLAC via qobuz.squid.wtf (existing
          *    integration since v0.9.0; proven matching, well-known catalog)
-         * 2. monochrome_tidal — Tidal Lossless 16/44.1 FLAC via
-         *    api.monochrome.tf (added in v0.9.10; different operator from
-         *    squid.wtf so outages are uncorrelated)
+         * 2. kennyy_qobuz — Qobuz Hi-Res FLAC via qobuz.kennyy.com.br
+         *    (added in v0.9.10; sibling Qobuz-DL proxy, different operator,
+         *    no captcha gate — outages uncorrelated with squid.wtf)
          */
         val DEFAULT_PRIORITY: List<String> = listOf(
             "squid_qobuz",
-            "monochrome_tidal",
+            "kennyy_qobuz",
         )
     }
 }
