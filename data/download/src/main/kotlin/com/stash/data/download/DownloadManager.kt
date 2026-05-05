@@ -9,7 +9,7 @@ import com.stash.core.data.mapper.toDomain
 import com.stash.core.model.MusicSource
 import com.stash.core.model.Track
 import com.stash.data.download.files.FileOrganizer
-import com.stash.data.download.files.MetadataEmbedder
+import com.stash.data.download.shared.TrackFinalizer
 import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
 import com.stash.data.download.lossless.LosslessUrlDownloader
@@ -66,7 +66,6 @@ class DownloadManager @Inject constructor(
     private val matchScorer: MatchScorer,
     private val duplicateDetection: DuplicateDetectionService,
     private val fileOrganizer: FileOrganizer,
-    private val metadataEmbedder: MetadataEmbedder,
     private val qualityPrefs: QualityPreferencesManager,
     private val ytLibraryCanonicalizer: YtLibraryCanonicalizer,
     private val trackDao: TrackDao,
@@ -76,6 +75,7 @@ class DownloadManager @Inject constructor(
     private val losslessRegistry: LosslessSourceRegistry,
     private val losslessUrlDownloader: LosslessUrlDownloader,
     private val losslessPrefs: LosslessSourcePreferences,
+    private val trackFinalizer: TrackFinalizer,
 ) {
     /** Limits concurrent downloads. 8 parallel slots — with native opus (no FFmpeg
      *  transcode) downloads are almost entirely network-bound so more parallelism helps. */
@@ -317,47 +317,49 @@ class DownloadManager @Inject constructor(
 
         emitProgress(track.id, 0.85f, DownloadStatus.PROCESSING)
 
-        // Embed metadata (title/artist/album) so the FLAC has the same
-        // tagging discipline as a yt-dlp output. ffmpeg -c copy means
-        // no re-encode — fast and lossless.
-        runCatching { metadataEmbedder.embedMetadata(fetched, track) }
-            .onFailure { e -> Log.w(TAG, "lossless metadata embed failed for ${track.id}", e) }
-
-        val committed = runCatching {
-            fileOrganizer.commitDownload(
-                tempFile = fetched,
-                artist = track.artist,
-                album = track.album.ifEmpty { null },
-                title = track.title,
-                format = ext,
-            )
-        }.getOrElse { e ->
-            Log.w(TAG, "lossless commitDownload failed for ${track.id}", e)
-            runCatching { fetched.delete() }
-            return null
-        }
-
-        Log.i(
-            TAG,
-            "Lossless downloaded (${match.sourceId}): ${track.artist} - ${track.title} → ${committed.filePath}",
+        // Delegate embed + commit + probe to the shared TrackFinalizer.
+        // TrackFinalizer is stateless w.r.t. DB — all DB writes remain here
+        // so the full domain Track (spotifyUri, isrc, album, explicit, etc.)
+        // is preserved without being funnelled through a thinner data class.
+        val finalized = trackFinalizer.finalizeFile(
+            sourceFile = fetched,
+            track = track,
+            format = match.format,
         )
+        when (finalized) {
+            is TrackFinalizer.FinalizeResult.Success -> {
+                Log.i(
+                    TAG,
+                    "Lossless downloaded (${match.sourceId}): ${track.artist} - ${track.title}" +
+                        " → ${finalized.committed.filePath}",
+                )
 
-        // Persist album art surfaced by the source's catalog API.
-        // fillMissingAlbumArtUrl is fill-only-if-blank, so a Spotify-
-        // sourced track that already has artwork keeps it; Stash-Discover
-        // tracks that came in metadata-less get the Qobuz image. Failure
-        // here is non-fatal — the file is on disk and playable; only the
-        // visual is degraded.
-        match.coverArtUrl?.let { url ->
-            runCatching {
-                trackDao.fillMissingAlbumArtUrl(track.id, url)
-            }.onFailure { e ->
-                Log.w(TAG, "lossless: fillMissingAlbumArtUrl failed for ${track.id}: ${e.message}")
+                // Persist album art surfaced by the source's catalog API.
+                // fillMissingAlbumArtUrl is fill-only-if-blank, so a Spotify-
+                // sourced track that already has artwork keeps it; Stash-Discover
+                // tracks that came in metadata-less get the Qobuz image. Failure
+                // here is non-fatal — the file is on disk and playable; only the
+                // visual is degraded.
+                match.coverArtUrl?.let { url ->
+                    runCatching {
+                        trackDao.fillMissingAlbumArtUrl(track.id, url)
+                    }.onFailure { e ->
+                        Log.w(TAG, "lossless: fillMissingAlbumArtUrl failed for ${track.id}: ${e.message}")
+                    }
+                }
+
+                emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
+                return TrackDownloadResult.Success(finalized.committed.filePath)
+            }
+            is TrackFinalizer.FinalizeResult.Failed -> {
+                Log.w(TAG, "lossless finalize failed for ${track.id}: ${finalized.message}")
+                // fetched is managed by TrackFinalizer's internal runCatching;
+                // if commitDownload threw, the temp file may still be on disk.
+                // Best-effort cleanup to avoid leaving orphans in the temp dir.
+                runCatching { fetched.delete() }
+                return null  // fall through to yt-dlp — same semantics as before
             }
         }
-
-        emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
-        return TrackDownloadResult.Success(committed.filePath)
     }
 
     /**
