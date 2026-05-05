@@ -125,7 +125,11 @@ fun TrackListItem(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                FlacBadge(fileFormat = track.fileFormat)
+                FlacBadge(
+                    fileFormat = track.fileFormat,
+                    bitsPerSample = track.bitsPerSample,
+                    sampleRateHz = track.sampleRateHz,
+                )
             }
             Text(
                 text = track.artist,

@@ -133,7 +133,11 @@ fun DetailTrackRow(
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                FlacBadge(fileFormat = track.fileFormat)
+                FlacBadge(
+                    fileFormat = track.fileFormat,
+                    bitsPerSample = track.bitsPerSample,
+                    sampleRateHz = track.sampleRateHz,
+                )
             }
             // Determine subtitle text — default is artist, can be overridden or hidden
             val subtitle = subtitleOverride ?: track.artist

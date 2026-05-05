@@ -255,6 +255,8 @@ fun NowPlayingScreen(
                     Spacer(modifier = Modifier.width(8.dp))
                     com.stash.core.ui.components.FlacBadge(
                         fileFormat = track.fileFormat,
+                        bitsPerSample = track.bitsPerSample,
+                        sampleRateHz = track.sampleRateHz,
                         size = 18.dp,
                         tint = Color.White,
                     )

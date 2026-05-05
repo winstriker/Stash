@@ -961,7 +961,12 @@ private fun TracksTab(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
-                    com.stash.core.ui.components.FlacBadge(fileFormat = track.fileFormat, size = 16.dp)
+                    com.stash.core.ui.components.FlacBadge(
+                        fileFormat = track.fileFormat,
+                        bitsPerSample = track.bitsPerSample,
+                        sampleRateHz = track.sampleRateHz,
+                        size = 16.dp,
+                    )
                 }
                 Text(
                     text = track.artist,

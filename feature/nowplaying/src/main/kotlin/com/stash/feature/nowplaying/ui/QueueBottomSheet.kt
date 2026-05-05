@@ -209,7 +209,11 @@ fun QueueBottomSheet(
                                         overflow = TextOverflow.Ellipsis,
                                         modifier = Modifier.weight(1f, fill = false),
                                     )
-                                    com.stash.core.ui.components.FlacBadge(fileFormat = track.fileFormat)
+                                    com.stash.core.ui.components.FlacBadge(
+                                        fileFormat = track.fileFormat,
+                                        bitsPerSample = track.bitsPerSample,
+                                        sampleRateHz = track.sampleRateHz,
+                                    )
                                 }
                                 Text(
                                     text = track.artist,
@@ -375,7 +379,12 @@ private fun CurrentTrackRow(track: Track, accentColor: Color) {
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                com.stash.core.ui.components.FlacBadge(fileFormat = track.fileFormat, tint = accentColor)
+                com.stash.core.ui.components.FlacBadge(
+                    fileFormat = track.fileFormat,
+                    bitsPerSample = track.bitsPerSample,
+                    sampleRateHz = track.sampleRateHz,
+                    tint = accentColor,
+                )
             }
             Text(
                 track.artist,
