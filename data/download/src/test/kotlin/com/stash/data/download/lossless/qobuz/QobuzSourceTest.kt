@@ -1,6 +1,8 @@
 package com.stash.data.download.lossless.qobuz
 
 import com.stash.data.download.lossless.AggregatorRateLimiter
+import com.stash.data.download.lossless.LosslessQualityTier
+import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.RateLimitState
 import com.stash.data.download.lossless.TrackQuery
 import com.stash.data.download.lossless.squid.CaptchaExpiredNotifier
@@ -34,13 +36,16 @@ class QobuzSourceTest {
     private val apiClient: QobuzApiClient = mockk()
     private val rateLimiter: AggregatorRateLimiter = mockk(relaxUnitFun = true)
     private val captchaExpiredNotifier: CaptchaExpiredNotifier = mockk(relaxUnitFun = true)
+    private val losslessPrefs: LosslessSourcePreferences = mockk()
 
-    private fun source() = QobuzSource(apiClient, rateLimiter, captchaExpiredNotifier)
+    private fun source() = QobuzSource(apiClient, rateLimiter, captchaExpiredNotifier, losslessPrefs)
 
     private fun stubLimiterReady() {
         coEvery { rateLimiter.acquire(QobuzSource.SOURCE_ID) } returns true
         coEvery { rateLimiter.stateOf(QobuzSource.SOURCE_ID) } returns
             RateLimitState(3.0, 0L, false, 0L, 0)
+        coEvery { losslessPrefs.qualityTierNow() } returns LosslessQualityTier.MAX
+        coEvery { losslessPrefs.captchaCookieValueNow() } returns "valid-cookie"
     }
 
     private fun query(
@@ -83,6 +88,7 @@ class QobuzSourceTest {
     @Test fun `isEnabled true when rate limiter healthy`() = runTest {
         coEvery { rateLimiter.stateOf(QobuzSource.SOURCE_ID) } returns
             RateLimitState(3.0, 0L, false, 0L, 0)
+        coEvery { losslessPrefs.captchaCookieValueNow() } returns "valid-cookie"
         assertTrue(source().isEnabled())
     }
 

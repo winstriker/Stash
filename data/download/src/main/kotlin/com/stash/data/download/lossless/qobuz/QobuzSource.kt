@@ -25,11 +25,12 @@ import kotlin.math.abs
  * DDoSing what is, structurally, one paid Qobuz account serving an
  * unbounded user base. Conservative defaults are deliberate.
  *
- * Quality default is [QobuzQuality.FLAC_HIRES_192] — squid.wtf passes
- * "highest available <= requested" through from upstream Qobuz, so
- * asking for 24/192 always gets the best the source has. Quality
- * preferences (and a per-track region override via `tokenCountry`)
- * can be threaded through later via a settings layer.
+ * Quality is read from [LosslessSourcePreferences.qualityTierNow] on every
+ * `resolve()` call — users select a tier (CD/Hi-Res/Max) via Settings;
+ * squid.wtf passes the request through to upstream Qobuz, which serves
+ * "highest available <= requested." The actual delivered bit-depth and
+ * sample rate come back on the `track.maximumBitDepth` /
+ * `maximumSamplingRate` fields and flow into the [SourceResult.format].
  */
 @Singleton
 class QobuzSource @Inject constructor(
