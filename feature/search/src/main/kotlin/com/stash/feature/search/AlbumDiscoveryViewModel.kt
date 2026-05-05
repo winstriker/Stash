@@ -8,6 +8,7 @@ import com.stash.core.data.cache.AlbumCache
 import com.stash.core.data.repository.MusicRepository
 import com.stash.core.media.PlayerRepository
 import com.stash.core.media.actions.TrackActionsDelegate
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.core.model.TrackItem
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.CancellationException
@@ -64,6 +65,7 @@ class AlbumDiscoveryViewModel @Inject constructor(
     private val playerRepository: PlayerRepository,
     private val musicRepository: MusicRepository,
     val delegate: TrackActionsDelegate,
+    val losslessPrefetcher: LosslessUrlPrefetcher,
 ) : ViewModel() {
 
     private val browseId: String = requireNotNull(savedStateHandle["browseId"]) {

@@ -25,6 +25,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.core.model.TrackItem
 import com.stash.core.media.preview.PreviewState
 import com.stash.core.ui.components.DiscoveryErrorCard
@@ -147,13 +148,25 @@ fun AlbumDiscoveryScreen(
                             val currentPreviewState = previewState
                             val isPreviewPlaying = currentPreviewState is PreviewState.Playing &&
                                 currentPreviewState.videoId == track.videoId
+                            val trackItem = TrackItem(
+                                videoId = track.videoId,
+                                title = track.title,
+                                artist = track.artist,
+                                durationSeconds = track.durationSeconds,
+                                thumbnailUrl = track.thumbnailUrl,
+                            )
+                            // Warm the lossless URL cache as each album track row
+                            // enters composition. Idempotent — dedupes by videoId.
+                            LaunchedEffect(track.videoId) {
+                                vm.losslessPrefetcher.warmUp(trackItem)
+                            }
                             PreviewDownloadRow(
                                 item = track.toSearchResultItem(),
                                 isDownloading = track.videoId in downloadingIds,
                                 isDownloaded = track.videoId in downloadedIds,
                                 isPreviewLoading = previewLoadingId == track.videoId,
                                 isPreviewPlaying = isPreviewPlaying,
-                                onPreview = { vm.delegate.previewTrack(track.videoId) },
+                                onPreview = { vm.delegate.previewTrack(trackItem) },
                                 onStopPreview = { vm.delegate.stopPreview() },
                                 onDownload = {
                                     vm.delegate.downloadTrack(

@@ -4,9 +4,12 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.padding
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.core.media.preview.PreviewState
+import com.stash.core.model.TrackItem
 import com.stash.data.ytmusic.model.TrackSummary
 
 /**
@@ -26,9 +29,10 @@ import com.stash.data.ytmusic.model.TrackSummary
  * @param downloadingIds Video IDs currently downloading (drives per-row spinner).
  * @param downloadedIds Video IDs already downloaded (drives per-row checkmark).
  * @param previewLoadingId Video ID whose preview URL is being resolved, or null.
- * @param onPreview Invoked with a `videoId` when a row's play button is tapped.
+ * @param onPreview Invoked with a [TrackItem] when a row's play button is tapped.
  * @param onStopPreview Invoked when the currently-playing row's stop button is tapped.
  * @param onDownload Invoked with the row's [SearchResultItem] when its download arrow is tapped.
+ * @param losslessPrefetcher Warms the lossless URL cache as each row enters composition.
  */
 @Composable
 fun PopularTracksSection(
@@ -37,7 +41,8 @@ fun PopularTracksSection(
     downloadingIds: Set<String>,
     downloadedIds: Set<String>,
     previewLoadingId: String?,
-    onPreview: (String) -> Unit,
+    losslessPrefetcher: LosslessUrlPrefetcher,
+    onPreview: (TrackItem) -> Unit,
     onStopPreview: () -> Unit,
     onDownload: (SearchResultItem) -> Unit,
     modifier: Modifier = Modifier,
@@ -48,6 +53,12 @@ fun PopularTracksSection(
     ) {
         tracks.forEach { track ->
             val item = track.toSearchResultItem()
+            val trackItem = track.toTrackItem()
+            // Warm the lossless URL cache as each Popular row enters composition.
+            // Idempotent — LosslessUrlPrefetcher dedupes by videoId.
+            LaunchedEffect(track.videoId) {
+                losslessPrefetcher.warmUp(trackItem)
+            }
             PreviewDownloadRow(
                 item = item,
                 isDownloading = track.videoId in downloadingIds,
@@ -55,7 +66,7 @@ fun PopularTracksSection(
                 isPreviewLoading = previewLoadingId == track.videoId,
                 isPreviewPlaying = previewState is PreviewState.Playing &&
                     previewState.videoId == track.videoId,
-                onPreview = { onPreview(track.videoId) },
+                onPreview = { onPreview(trackItem) },
                 onStopPreview = onStopPreview,
                 onDownload = { onDownload(item) },
             )

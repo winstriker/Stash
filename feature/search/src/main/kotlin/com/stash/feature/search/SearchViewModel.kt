@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.stash.core.common.perf.PerfLog
 import com.stash.core.media.actions.TrackActionsDelegate
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.data.ytmusic.YTMusicApiClient
 import com.stash.data.ytmusic.model.SearchResultSection
 import com.stash.data.ytmusic.model.TopResultItem
@@ -48,6 +49,7 @@ class SearchViewModel @Inject constructor(
     private val api: YTMusicApiClient,
     private val prefetcher: PreviewPrefetcher,
     val delegate: TrackActionsDelegate,
+    val losslessPrefetcher: LosslessUrlPrefetcher,
 ) : ViewModel() {
 
     companion object {
