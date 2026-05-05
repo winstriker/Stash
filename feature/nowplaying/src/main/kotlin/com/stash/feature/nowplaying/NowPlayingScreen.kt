@@ -283,6 +283,25 @@ fun NowPlayingScreen(
                 modifier = Modifier.fillMaxWidth(),
             )
 
+            // Quality line — codec + bit-depth/sample-rate + bitrate, when known.
+            // Sized smaller than the artist/album line; degrades gracefully when
+            // some fields are missing (returns a partial line, not nothing).
+            if (track != null) {
+                val qualityText = trackQualityText(track)
+                if (qualityText != null) {
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = qualityText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color.White.copy(alpha = 0.5f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+
             Spacer(modifier = Modifier.height(28.dp))
 
             // -- Progress bar --
@@ -540,4 +559,29 @@ private fun PlaybackControls(
             )
         }
     }
+}
+
+/**
+ * Formats a one-line quality summary for the Now Playing screen.
+ *
+ * Examples:
+ *   - All four fields known:  `FLAC · 24-bit/96.0 kHz · 4233 kbps`
+ *   - Codec + bitrate only:    `OPUS · 160 kbps`
+ *   - Codec only:              `FLAC` (data not yet backfilled)
+ *
+ * Returns null only when the codec is blank — in that case the caller
+ * should render no line at all.
+ */
+private fun trackQualityText(track: com.stash.core.model.Track): String? {
+    val codec = track.fileFormat.takeIf { it.isNotBlank() }?.uppercase() ?: return null
+    val bitDepth = track.bitsPerSample
+    val sampleRateKHz = track.sampleRateHz?.let { it / 1000.0 }
+    val bitrate = track.qualityKbps.takeIf { it > 0 }
+    return buildList {
+        add(codec)
+        if (bitDepth != null && sampleRateKHz != null) {
+            add("${bitDepth}-bit/${"%.1f".format(sampleRateKHz)} kHz")
+        }
+        if (bitrate != null) add("$bitrate kbps")
+    }.joinToString(" · ")
 }
