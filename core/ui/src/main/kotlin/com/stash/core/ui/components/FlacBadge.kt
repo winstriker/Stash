@@ -25,15 +25,18 @@ import androidx.compose.ui.graphics.Color
  *     row layouts that already carry artist + album text.
  *   - `FLAC 24/96` / `FLAC 24/192` — Hi-Res variants.
  *
- * Optional [size] kept on the API for backwards compatibility (some
- * callers passed a larger value on Now Playing); used as a vertical
- * padding hint when set.
+ * Optional [size] retained on the API for backwards compatibility
+ * (some callers pass a larger value on Now Playing). Not currently
+ * applied to the pill — the Surface uses fixed `padding(horizontal =
+ * 6.dp, vertical = 2.dp)`. Wired-or-removed in a follow-up pass once
+ * all callers are audited.
  *
  * @param fileFormat   Track codec — gates whether the badge renders at all.
  * @param bitsPerSample Track bit-depth (16/24/32) or null when unknown.
  * @param sampleRateHz Track sample rate (44100/96000/192000) or null when unknown.
- * @param size         Legacy size hint kept on the API; retained for now-playing
- *                     callers that historically passed a larger value.
+ * @param size         Legacy parameter retained on the API for call-site
+ *                     compatibility. Not currently applied to the pill — see
+ *                     the description above.
  * @param tint         Optional override for the text color. Default is
  *                     `onTertiaryContainer` from the theme.
  */
