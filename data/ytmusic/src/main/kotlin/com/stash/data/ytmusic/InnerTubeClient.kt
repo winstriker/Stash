@@ -292,6 +292,34 @@ class InnerTubeClient @Inject constructor(
     }
 
     /**
+     * v0.9.13: Like a track in YouTube Music. Sets `likeStatus = LIKE`
+     * on the videoId, which adds it to the user's Liked Music library
+     * AND surfaces it as recommendation input. Auth via existing
+     * SAPISID-hash flow (per-request header).
+     *
+     * Returns true on success. Logs and returns false on failure
+     * (signed-out, network down, endpoint blocked) — caller treats
+     * non-success as "skip this destination, surface snackbar."
+     */
+    suspend fun likeVideo(videoId: String): Boolean = runCatching {
+        val variant = InnerTubeVariant.WEB_REMIX
+        val payload = buildJsonObject {
+            put("context", buildContext(variant))
+            put("target", buildJsonObject { put("videoId", videoId) })
+        }
+        val outcome = executeRequestWithStatus(
+            url = "$BASE_URL/like/like",
+            body = payload,
+            cookie = null,
+            variant = variant,
+        )
+        outcome.body != null && outcome.statusCode in 200..299
+    }.getOrElse { e ->
+        Log.w(TAG, "likeVideo failed for $videoId: ${e.message}")
+        false
+    }
+
+    /**
      * Audio-focused player lookup. Tries each variant in [AUDIO_VARIANT_ORDER]
      * until one returns `streamingData.adaptiveFormats` with at least one
      * entry carrying a direct `url` (i.e. unciphered). Returns the first
