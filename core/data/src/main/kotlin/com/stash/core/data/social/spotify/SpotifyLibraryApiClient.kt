@@ -2,10 +2,11 @@ package com.stash.core.data.social.spotify
 
 import android.util.Log
 import com.stash.core.auth.TokenManager
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.RequestBody
-import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.RequestBody.Companion.toRequestBody
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -34,7 +35,7 @@ class SpotifyLibraryApiClient @Inject constructor(
     private val tokenManager: TokenManager,
     private val httpClient: OkHttpClient,
 ) {
-    suspend fun saveTracks(spotifyUris: List<String>) {
+    suspend fun saveTracks(spotifyUris: List<String>) = withContext(Dispatchers.IO) {
         require(spotifyUris.isNotEmpty()) { "saveTracks: empty list" }
         require(spotifyUris.size <= 50) { "Spotify caps at 50 IDs per call (got ${spotifyUris.size})" }
 
@@ -46,7 +47,7 @@ class SpotifyLibraryApiClient @Inject constructor(
         val url = "https://api.spotify.com/v1/me/tracks?ids=$ids"
 
         // PUT /v1/me/tracks expects an empty body (IDs are in the query).
-        val emptyBody = RequestBody.create(null, ByteArray(0))
+        val emptyBody = ByteArray(0).toRequestBody(null)
         val request = Request.Builder()
             .url(url)
             .put(emptyBody)
