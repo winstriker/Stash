@@ -25,6 +25,7 @@ import com.stash.core.data.sync.workers.StashDiscoveryWorker
 import com.stash.core.data.sync.workers.StashMixRefreshWorker
 import com.stash.core.data.sync.workers.TagEnrichmentWorker
 import com.stash.core.data.sync.workers.UpdateCheckWorker
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.data.download.ytdlp.YtDlpUpdateWorker
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
@@ -83,6 +84,9 @@ class StashApplication : Application(), Configuration.Provider {
     @Inject
     lateinit var downloadNetworkPreference: DownloadNetworkPreference
 
+    @Inject
+    lateinit var losslessPrefetcher: LosslessUrlPrefetcher
+
     /** Application-scoped coroutine scope for one-shot startup tasks. */
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -108,6 +112,14 @@ class StashApplication : Application(), Configuration.Provider {
         }
         applicationScope.launch {
             musicRepository.ensureDownloadsMixSeeded()
+        }
+        // Prune stale lossless prefetch entries every 60s. Bounded
+        // memory growth across long browse sessions.
+        applicationScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(60_000)
+                losslessPrefetcher.cancelStale()
+            }
         }
         applicationScope.launch {
             ytDlpManager.initialize()

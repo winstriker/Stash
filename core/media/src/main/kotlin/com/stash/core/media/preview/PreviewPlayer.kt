@@ -10,6 +10,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.MediaSource
 import com.stash.core.common.perf.PerfLog
 import com.stash.core.media.equalizer.EqController
 import com.stash.core.media.equalizer.StashRenderersFactory
@@ -262,6 +263,46 @@ class PreviewPlayer @Inject constructor(
                 }
             }
         })
+    }
+
+    /**
+     * v0.9.12: MediaSource-based playback for the search-tab path.
+     *
+     * [SearchPreviewMediaSource] builds a [CacheDataSource]-wrapped source that
+     * streams from Qobuz CDN (or yt-dlp fallback) AND caches bytes so that a
+     * subsequent download finalise step can read from cache without re-fetching.
+     *
+     * This entry point is preferred when the caller has a [TrackItem] in scope;
+     * [playUrl] remains for the URL-only retry path in [TrackActionsDelegate.onPreviewError].
+     *
+     * Idempotency: if [videoId] is already playing this call is a no-op (the
+     * listener-based guard in [requirePlayer] ensures [currentVideoId] is always
+     * up to date). The caller ([TrackActionsDelegate.previewTrack]) performs the
+     * same idempotency check before reaching here, so the guard below is a
+     * safety net for any future direct callers.
+     *
+     * @param videoId     Logical identifier of the track, used only for state
+     *                    reporting and idempotency; never passed to ExoPlayer directly.
+     * @param mediaSource Pre-built [MediaSource] from [SearchPreviewMediaSource.create].
+     */
+    @OptIn(UnstableApi::class)
+    fun play(videoId: String, mediaSource: MediaSource) {
+        val player = requirePlayer()
+        // Idempotency: skip if already playing this exact videoId.
+        if (currentVideoId == videoId && player.isPlaying) return
+
+        // Stop previous playback and clear queue so stale STATE_ENDED events
+        // from the prior track cannot fire after we replace the source.
+        player.stop()
+        player.clearMediaItems()
+
+        currentVideoId = videoId
+
+        player.setMediaSource(mediaSource)
+        player.prepare()
+        player.playWhenReady = true
+
+        PerfLog.d { "PreviewPlayer.play($videoId) via MediaSource" }
     }
 
     /**

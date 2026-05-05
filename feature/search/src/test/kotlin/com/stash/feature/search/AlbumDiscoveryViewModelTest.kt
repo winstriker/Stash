@@ -6,7 +6,7 @@ import com.stash.core.data.cache.AlbumCache
 import com.stash.core.data.repository.MusicRepository
 import com.stash.core.media.PlayerRepository
 import com.stash.core.media.actions.TrackActionsDelegate
-import com.stash.core.media.actions.TrackItem
+import com.stash.core.model.TrackItem
 import com.stash.core.media.preview.PreviewState
 import com.stash.core.model.Track
 import com.stash.data.ytmusic.model.AlbumDetail

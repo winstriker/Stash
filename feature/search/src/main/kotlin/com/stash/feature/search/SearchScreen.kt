@@ -70,7 +70,9 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.merge
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.core.media.preview.PreviewState
+import com.stash.core.model.TrackItem
 import com.stash.core.ui.components.AlbumSquareCard
 import com.stash.core.ui.components.ArtistAvatarCard
 import com.stash.core.ui.components.SectionHeader
@@ -137,10 +139,11 @@ fun SearchScreen(
                     downloadedIds = downloadedIds,
                     previewLoadingId = previewLoadingId,
                     previewState = previewState,
+                    losslessPrefetcher = viewModel.losslessPrefetcher,
                     onArtistClick = { a -> onNavigateToArtist(a.id, a.name, a.avatarUrl) },
                     onAlbumClick = onNavigateToAlbum,
-                    onTopTrackClick = { t -> viewModel.delegate.previewTrack(t.videoId) },
-                    onPreview = { viewModel.delegate.previewTrack(it) },
+                    onTopTrackClick = { t -> viewModel.delegate.previewTrack(t.toTrackItem()) },
+                    onPreview = { track -> viewModel.delegate.previewTrack(track) },
                     onStopPreview = viewModel.delegate::stopPreview,
                     onDownload = { t -> viewModel.delegate.downloadTrack(t.toTrackItem()) },
                     onVisibleSongIdsChanged = viewModel::prefetchVisible,
@@ -239,10 +242,11 @@ private fun SectionedResultsList(
     downloadedIds: Set<String>,
     previewLoadingId: String?,
     previewState: PreviewState,
+    losslessPrefetcher: LosslessUrlPrefetcher,
     onArtistClick: (ArtistSummary) -> Unit,
     onAlbumClick: (AlbumSummary) -> Unit,
     onTopTrackClick: (TrackSummary) -> Unit,
-    onPreview: (String) -> Unit,
+    onPreview: (TrackItem) -> Unit,
     onStopPreview: () -> Unit,
     onDownload: (TrackSummary) -> Unit,
     onVisibleSongIdsChanged: (List<String>) -> Unit = {},
@@ -280,6 +284,11 @@ private fun SectionedResultsList(
                     val top = section.item
                     if (top is TopResultItem.TrackTop) {
                         val videoId = top.track.videoId
+                        // Warm the lossless URL cache for the top-result track as
+                        // soon as the card enters composition.
+                        LaunchedEffect(videoId) {
+                            losslessPrefetcher.warmUp(top.track.toTrackItem())
+                        }
                         TopResultCard(
                             item = top,
                             onArtistClick = onArtistClick,
@@ -289,7 +298,7 @@ private fun SectionedResultsList(
                             isPreviewLoading = previewLoadingId == videoId,
                             isPreviewPlaying = previewState is PreviewState.Playing &&
                                 previewState.videoId == videoId,
-                            onPreview = { onPreview(videoId) },
+                            onPreview = { onPreview(top.track.toTrackItem()) },
                             onStopPreview = onStopPreview,
                             onDownload = { onDownload(top.track) },
                         )
@@ -305,6 +314,12 @@ private fun SectionedResultsList(
                     item(key = "songs_header") { SectionHeader("Songs") }
                     items(section.tracks, key = { "song_" + it.videoId }) { t ->
                         val item = t.toSearchResultItem()
+                        // Warm the lossless URL cache for each song row as it
+                        // scrolls into view — idempotent, safe to call on every
+                        // recomposition (LosslessUrlPrefetcher dedupes by videoId).
+                        LaunchedEffect(t.videoId) {
+                            losslessPrefetcher.warmUp(t.toTrackItem())
+                        }
                         PreviewDownloadRow(
                             item = item,
                             isDownloading = t.videoId in downloadingIds,
@@ -312,7 +327,7 @@ private fun SectionedResultsList(
                             isPreviewLoading = previewLoadingId == t.videoId,
                             isPreviewPlaying = previewState is PreviewState.Playing &&
                                 previewState.videoId == t.videoId,
-                            onPreview = { onPreview(t.videoId) },
+                            onPreview = { onPreview(t.toTrackItem()) },
                             onStopPreview = onStopPreview,
                             onDownload = { onDownload(t) },
                             modifier = Modifier.padding(horizontal = 16.dp),

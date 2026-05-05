@@ -9,6 +9,7 @@ import com.stash.core.common.perf.PerfLog
 import com.stash.core.data.cache.ArtistCache
 import com.stash.core.data.cache.CachedProfile
 import com.stash.core.media.actions.TrackActionsDelegate
+import com.stash.core.media.preview.LosslessUrlPrefetcher
 import com.stash.data.ytmusic.model.ArtistProfile
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -52,6 +53,7 @@ class ArtistProfileViewModel @Inject constructor(
     private val artistCache: ArtistCache,
     private val prefetcher: PreviewPrefetcher,
     val delegate: TrackActionsDelegate,
+    val losslessPrefetcher: LosslessUrlPrefetcher,
 ) : ViewModel() {
 
     private val artistId: String = requireNotNull(savedStateHandle["artistId"]) {

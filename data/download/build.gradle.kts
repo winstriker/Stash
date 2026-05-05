@@ -44,6 +44,14 @@ dependencies {
     // SAF support for writing downloads to a user-chosen external-storage tree
     // (SD card / USB-OTG). DocumentFile wraps the raw content-tree Uri.
     implementation("androidx.documentfile:documentfile:1.0.1")
+    // media3-datasource provides DataSpec, CacheDataSource, SimpleCache,
+    // HttpDataSource.Factory, and CacheKeyFactory for SearchDownloadCoordinator.
+    // media3-database provides DatabaseProvider (transitive dep of SimpleCache).
+    // Not declared in :core:media because that module already pulls them
+    // transitively, but :data:download is a leaf that doesn't depend on
+    // :core:media (circular — core:media depends on data:download).
+    implementation(libs.media3.datasource)
+    implementation(libs.media3.database)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")

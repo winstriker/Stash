@@ -10,6 +10,7 @@ import com.stash.core.media.preview.PreviewPlayer
 import com.stash.core.media.preview.PreviewState
 import com.stash.core.model.MusicSource
 import com.stash.core.model.QualityTier
+import com.stash.core.model.TrackItem
 import com.stash.data.download.DownloadExecutor
 import com.stash.data.download.DownloadResult
 import com.stash.data.download.files.FileOrganizer

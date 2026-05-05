@@ -4,18 +4,14 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.PlaybackException
 import com.stash.core.data.db.dao.TrackDao
-import com.stash.core.data.repository.MusicRepository
 import com.stash.core.media.preview.PreviewPlayer
 import com.stash.core.media.preview.PreviewState
-import com.stash.core.model.MusicSource
-import com.stash.core.model.Track
-import com.stash.data.download.DownloadExecutor
-import com.stash.data.download.DownloadResult
-import com.stash.data.download.files.FileOrganizer
-import com.stash.data.download.prefs.QualityPreferencesManager
-import com.stash.data.download.prefs.toYtDlpArgs
+import com.stash.core.media.preview.SearchPreviewMediaSource
+import com.stash.core.model.TrackItem
 import com.stash.data.download.preview.PreviewUrlCache
 import com.stash.data.download.preview.PreviewUrlExtractor
+import com.stash.data.download.search.SearchDownloadCoordinator
+import com.stash.data.download.search.SearchDownloadStatus
 import dagger.hilt.android.scopes.ViewModelScoped
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -25,10 +21,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.util.UUID
 import javax.inject.Inject
 
 /**
@@ -49,13 +43,11 @@ import javax.inject.Inject
 @ViewModelScoped
 class TrackActionsDelegate @Inject constructor(
     private val previewPlayer: PreviewPlayer,
+    private val searchPreviewMediaSource: SearchPreviewMediaSource,
     private val previewUrlExtractor: PreviewUrlExtractor,
     private val previewUrlCache: PreviewUrlCache,
-    private val downloadExecutor: DownloadExecutor,
     private val trackDao: TrackDao,
-    private val fileOrganizer: FileOrganizer,
-    private val qualityPrefs: QualityPreferencesManager,
-    private val musicRepository: MusicRepository,
+    private val searchDownloadCoordinator: SearchDownloadCoordinator,
 ) {
     /** Mirrors [PreviewPlayer.previewState] so consumers don't need a second dep. */
     val previewState: StateFlow<PreviewState> = previewPlayer.previewState
@@ -117,18 +109,33 @@ class TrackActionsDelegate @Inject constructor(
         checkNotNull(boundScope) { "TrackActionsDelegate used before bindToScope" }
 
     /**
-     * Starts an audio preview for [videoId].
+     * Starts an audio preview for [track] using the v0.9.12 MediaSource-based
+     * happy path first, then falls back to the yt-dlp URL extractor on failure.
      *
-     * Hits the shared [PreviewUrlCache] first — if prefetcher already warmed
-     * the URL, playback starts immediately. Otherwise falls through to the
-     * full [PreviewUrlExtractor] race (InnerTube vs yt-dlp).
+     * ### Happy path (new in v0.9.12)
+     * [SearchPreviewMediaSource.create] resolves a Qobuz CDN URL (or yt-dlp
+     * fallback) and wraps it in a [CacheDataSource]-backed [MediaSource] so that
+     * bytes streamed during preview are reused by a subsequent download finalise
+     * step — avoiding a second full-file fetch.  [PreviewPlayer.play] consumes
+     * the [MediaSource] directly; no URL string is exposed to this layer.
      *
-     * The `lastPreviewVideoId` / `lastPreviewStartedAt` bookkeeping MUST be
-     * set BEFORE `playUrl` so a synchronous `onPlayerError` (which can fire
-     * for a malformed URL) still observes the correct "most recent preview"
-     * state.
+     * ### Error fallback (unchanged from pre-v0.9.12)
+     * If the happy path throws, we fall back to [previewUrlExtractor] +
+     * [PreviewUrlCache] + [PreviewPlayer.playUrl] — the same URL-only flow
+     * used before this rewrite.  [onPreviewError] also retains this fallback
+     * for ExoPlayer-level IO failures that fire after [play] returns.
+     *
+     * ### Bookkeeping
+     * [lastPreviewVideoId] / [lastPreviewStartedAt] are recorded BEFORE calling
+     * [play] so a synchronous [onPlayerError] (possible for malformed URLs)
+     * still observes the correct "most recent preview" state.
+     *
+     * @param track Full [TrackItem] so that [SearchPreviewMediaSource] can
+     *              perform artist+title matching for lossless-source selection.
      */
-    fun previewTrack(videoId: String) {
+    fun previewTrack(track: TrackItem) {
+        val videoId = track.videoId
+
         // Idempotency guard: if we're already playing — or loading — this same
         // videoId, do nothing. Prevents redundant stop+restart cycles from
         // phantom clicks, double-taps, or any future caller that fires the
@@ -143,30 +150,64 @@ class TrackActionsDelegate @Inject constructor(
             val t0 = System.currentTimeMillis()
             _previewLoadingId.value = videoId
             try {
-                val cacheHit = previewUrlCache[videoId] != null
-                android.util.Log.d("LATDIAG", "preview-start videoId=$videoId cache=$cacheHit")
-                val url = previewUrlCache[videoId]
-                    ?: previewUrlExtractor.extractStreamUrl(videoId).also {
-                        previewUrlCache[videoId] = it
-                    }
+                android.util.Log.d("LATDIAG", "preview-start videoId=$videoId via MediaSource")
+
+                // v0.9.12 happy path: build a CacheDataSource-wrapped MediaSource.
+                // create() is suspend; it resolves the upstream URL (Qobuz or yt-dlp)
+                // and constructs the source, but does NOT begin network I/O yet —
+                // that happens inside ExoPlayer once prepare() is called by play().
+                val mediaSource = searchPreviewMediaSource.create(track)
+
+                // Set bookkeeping BEFORE play() so a synchronous onPlayerError
+                // (which can fire for a malformed upstream URL before prepare()
+                // completes) still sees the correct "most recent preview" state
+                // and triggers the onPreviewError retry path correctly.
                 lastPreviewVideoId = videoId
                 lastPreviewStartedAt = SystemClock.elapsedRealtime()
-                previewPlayer.playUrl(videoId, url)
+
+                previewPlayer.play(videoId, mediaSource)
                 _previewLoadingId.value = null
+
                 android.util.Log.d(
                     "LATDIAG",
-                    "preview-play videoId=$videoId totalDt=${System.currentTimeMillis() - t0}ms cache=$cacheHit",
+                    "preview-play videoId=$videoId totalDt=${System.currentTimeMillis() - t0}ms via MediaSource",
                 )
             } catch (e: Exception) {
                 if (e is CancellationException) throw e
-                Log.e(TAG, "Preview failed for videoId=$videoId", e)
+
+                // Happy-path failure: fall back to the URL-only extractor so the
+                // user still gets a preview even when the Qobuz proxy is unavailable.
+                Log.w(TAG, "MediaSource path failed for videoId=$videoId (${e.message}), falling back to URL extractor", e)
                 android.util.Log.d(
                     "LATDIAG",
-                    "preview-fail videoId=$videoId totalDt=${System.currentTimeMillis() - t0}ms err=${e.javaClass.simpleName}",
+                    "preview-mediasource-fail videoId=$videoId totalDt=${System.currentTimeMillis() - t0}ms err=${e.javaClass.simpleName}",
                 )
-                _previewLoadingId.value = null
-                _userMessages.emit("Couldn't load preview.")
-                previewPlayer.stop()
+
+                runCatching {
+                    val cacheHit = previewUrlCache[videoId] != null
+                    val url = previewUrlCache[videoId]
+                        ?: previewUrlExtractor.extractStreamUrl(videoId).also {
+                            previewUrlCache[videoId] = it
+                        }
+                    lastPreviewVideoId = videoId
+                    lastPreviewStartedAt = SystemClock.elapsedRealtime()
+                    previewPlayer.playUrl(videoId, url)
+                    _previewLoadingId.value = null
+                    android.util.Log.d(
+                        "LATDIAG",
+                        "preview-url-fallback-play videoId=$videoId cache=$cacheHit totalDt=${System.currentTimeMillis() - t0}ms",
+                    )
+                }.onFailure { retryError ->
+                    if (retryError is CancellationException) throw retryError
+                    Log.e(TAG, "URL-fallback preview also failed for videoId=$videoId", retryError)
+                    android.util.Log.d(
+                        "LATDIAG",
+                        "preview-fail videoId=$videoId totalDt=${System.currentTimeMillis() - t0}ms err=${retryError.javaClass.simpleName}",
+                    )
+                    _previewLoadingId.value = null
+                    _userMessages.emit("Couldn't load preview.")
+                    previewPlayer.stop()
+                }
             }
         }
     }
@@ -225,101 +266,46 @@ class TrackActionsDelegate @Inject constructor(
      * the cancel.
      */
     fun downloadTrack(item: TrackItem) {
-        if (item.videoId in _downloadingIds.value) return
-        if (item.videoId in _downloadedIds.value) return
-        _downloadingIds.update { it + item.videoId }
+        val key = item.videoId
+        if (key in _downloadingIds.value || key in _downloadedIds.value) return
+        _downloadingIds.update { it + key }
 
         scope().launch {
-            val t0 = System.currentTimeMillis()
-            android.util.Log.d("LATDIAG", "download-start videoId=${item.videoId} title='${item.title}'")
             try {
-                val url = "https://www.youtube.com/watch?v=${item.videoId}"
-                val qualityTier = qualityPrefs.qualityTier.first()
-                val qualityArgs = qualityTier.toYtDlpArgs()
-                val tempDir = fileOrganizer.getTempDir()
-                val tempFilename = "actions_${item.videoId}_${UUID.randomUUID()}"
-
-                val dt0 = System.currentTimeMillis()
-                val result = downloadExecutor.download(
-                    url = url,
-                    outputDir = tempDir,
-                    filename = tempFilename,
-                    qualityArgs = qualityArgs,
-                )
-                val downloadDt = System.currentTimeMillis() - dt0
-                android.util.Log.d(
-                    "LATDIAG",
-                    "download-exec videoId=${item.videoId} dt=${downloadDt}ms result=${result.javaClass.simpleName}",
-                )
-                when (result) {
-                    is DownloadResult.Success -> {
-                        val ct0 = System.currentTimeMillis()
-                        handleDownloadSuccess(result, item)
-                        val commitDt = System.currentTimeMillis() - ct0
-                        android.util.Log.d(
-                            "LATDIAG",
-                            "download-commit videoId=${item.videoId} dt=${commitDt}ms totalDt=${System.currentTimeMillis() - t0}ms",
-                        )
-                    }
-                    is DownloadResult.YtDlpError -> {
-                        Log.e(TAG, "Download failed for ${item.title}: ${result.message.take(100)}")
-                        markDownloadFailed(item.videoId)
-                    }
-                    is DownloadResult.NoOutput -> {
-                        Log.e(TAG, "Download produced no output for ${item.title}")
-                        markDownloadFailed(item.videoId)
-                    }
-                    is DownloadResult.Error -> {
-                        Log.e(TAG, "Download error for ${item.title}: ${result.message}")
-                        markDownloadFailed(item.videoId)
+                searchDownloadCoordinator.download(item).collect { status ->
+                    when (status) {
+                        is SearchDownloadStatus.Resolving -> {
+                            // Already in _downloadingIds; no UI change needed.
+                        }
+                        is SearchDownloadStatus.Downloading -> {
+                            // Notify the user when falling back to YouTube — the
+                            // lossless (Qobuz) path is the expected fast case and
+                            // needs no message.
+                            if (status.via == SearchDownloadStatus.Source.YOUTUBE) {
+                                _userMessages.tryEmit("Downloading via YouTube (slower)…")
+                            }
+                        }
+                        is SearchDownloadStatus.Completed -> {
+                            _downloadingIds.update { it - key }
+                            _downloadedIds.update { it + key }
+                        }
+                        is SearchDownloadStatus.Failed -> {
+                            _downloadingIds.update { it - key }
+                            _userMessages.tryEmit("Download failed: ${status.message}")
+                        }
                     }
                 }
+            } catch (e: CancellationException) {
+                // Preserve structured cancellation — remove the spinner and
+                // rethrow so the owning scope sees the cancellation signal.
+                _downloadingIds.update { it - key }
+                throw e
             } catch (e: Exception) {
-                if (e is CancellationException) throw e
-                Log.e(TAG, "Download error for ${item.title}", e)
-                markDownloadFailed(item.videoId)
+                Log.e(TAG, "downloadTrack failed for $key", e)
+                _downloadingIds.update { it - key }
+                _userMessages.tryEmit("Download failed: ${e.message ?: "unknown error"}")
             }
         }
-    }
-
-    private suspend fun handleDownloadSuccess(
-        result: DownloadResult.Success,
-        item: TrackItem,
-    ) {
-        val committed = fileOrganizer.commitDownload(
-            tempFile = result.file,
-            artist = item.artist,
-            album = null,
-            title = item.title,
-            format = result.file.extension,
-        )
-
-        val track = Track(
-            title = item.title,
-            artist = item.artist,
-            durationMs = (item.durationSeconds * 1000).toLong(),
-            source = MusicSource.YOUTUBE,
-            youtubeId = item.videoId,
-            filePath = committed.filePath,
-            fileSizeBytes = committed.sizeBytes,
-            isDownloaded = true,
-            albumArtUrl = com.stash.core.common.ArtUrlUpgrader.upgrade(item.thumbnailUrl),
-        )
-        val trackId = musicRepository.insertTrack(track)
-
-        // Link to the protected "Your Downloads" playlist so the next-launch
-        // orphan sweep leaves this track alone. Swallow failures — the track
-        // is already in the library; a missing link self-heals on the next
-        // download (seeder re-runs) or on the next startup seeder pass.
-        runCatching { musicRepository.linkTrackToDownloadsMix(trackId) }
-            .onFailure { Log.e(TAG, "linkTrackToDownloadsMix failed for id=$trackId", it) }
-
-        _downloadingIds.update { it - item.videoId }
-        _downloadedIds.update { it + item.videoId }
-    }
-
-    private fun markDownloadFailed(videoId: String) {
-        _downloadingIds.update { it - videoId }
     }
 
     /**
@@ -367,18 +353,6 @@ class TrackActionsDelegate @Inject constructor(
     }
 }
 
-/**
- * Minimal track identity needed to initiate a download. A light-weight stand-in
- * that both `SearchResultItem` (feature/search) and any future caller (e.g.
- * `AlbumDiscoveryViewModel`) can map to at the call site with a one-liner.
- *
- * Lives here (not in `core/model`) because it's specific to the delegate's
- * download path — other layers work with full [com.stash.core.model.Track]s.
- */
-data class TrackItem(
-    val videoId: String,
-    val title: String,
-    val artist: String,
-    val durationSeconds: Double,
-    val thumbnailUrl: String?,
-)
+// TrackItem was defined here until v0.9.12; it now lives in
+// com.stash.core.model.TrackItem so that :data:download can reference it
+// without creating a circular module dependency with :core:media.

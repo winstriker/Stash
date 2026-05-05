@@ -1,0 +1,85 @@
+package com.stash.data.download.shared
+
+import android.util.Log
+import com.stash.core.data.audio.AudioDurationExtractor
+import com.stash.core.data.audio.AudioMetadata
+import com.stash.core.model.Track
+import com.stash.data.download.files.FileOrganizer
+import com.stash.data.download.files.FileOrganizer.CommittedTrack
+import com.stash.data.download.files.MetadataEmbedder
+import com.stash.data.download.lossless.AudioFormat
+import java.io.File
+import javax.inject.Inject
+import javax.inject.Singleton
+
+/**
+ * Shared file-side finalisation for downloaded audio. Used by sync
+ * ([com.stash.data.download.DownloadManager.tryLosslessDownload])
+ * and search ([com.stash.data.download.search.SearchDownloadCoordinator]).
+ *
+ * Steps:
+ *  1. Embed title/artist/album metadata into the file via ffmpeg.
+ *  2. Move the temp file to the canonical library path.
+ *  3. Probe the on-disk file for codec/bitrate/sample-rate/bit-depth.
+ *
+ * Returns [FinalizeResult]. **No DB writes** — caller does its own
+ * row insert/update so sync preserves spotifyUri/isrc/album/explicit
+ * and search runs `linkTrackToDownloadsMix` on its own path.
+ */
+@Singleton
+class TrackFinalizer @Inject constructor(
+    private val metadataEmbedder: MetadataEmbedder,
+    private val fileOrganizer: FileOrganizer,
+    private val audioExtractor: AudioDurationExtractor,
+) {
+    /**
+     * Embed metadata, commit to library, probe. Caller passes a [Track]
+     * built from whatever shape they have ([com.stash.core.model.Track]
+     * for sync; a stub built from a TrackItem for search).
+     *
+     * Embedding is non-fatal — file remains playable on failure.
+     * The probe in [FinalizeResult.Success.meta] may be null if the
+     * committed file cannot be opened by [MediaMetadataRetriever].
+     */
+    suspend fun finalizeFile(
+        sourceFile: File,
+        track: Track,
+        format: AudioFormat,
+        embedMetadata: Boolean = true,
+    ): FinalizeResult = runCatching {
+        if (embedMetadata) {
+            runCatching { metadataEmbedder.embedMetadata(sourceFile, track) }
+                .onFailure { e -> Log.w(TAG, "metadata embed failed: ${e.message}") }
+        }
+        val committed: CommittedTrack = fileOrganizer.commitDownload(
+            tempFile = sourceFile,
+            artist = track.artist,
+            album = track.album.takeIf { it.isNotBlank() },
+            title = track.title,
+            format = format.codec.ifBlank { "flac" },
+        )
+        val meta: AudioMetadata? = audioExtractor.extract(committed.filePath)
+        FinalizeResult.Success(committed, meta)
+    }.getOrElse { e ->
+        FinalizeResult.Failed(e.message ?: "finalize failed")
+    }
+
+    sealed interface FinalizeResult {
+        /**
+         * File was successfully embedded, committed, and probed.
+         * [meta] is null only if [AudioDurationExtractor] could not
+         * open the committed file (rare; file is still on disk and playable).
+         */
+        data class Success(
+            val committed: CommittedTrack,
+            val meta: AudioMetadata?,
+        ) : FinalizeResult
+
+        /** A fatal step (commit) failed; the temp file has been deleted by the caller. */
+        data class Failed(val message: String) : FinalizeResult
+    }
+
+    companion object {
+        private const val TAG = "TrackFinalizer"
+    }
+}
