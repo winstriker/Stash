@@ -452,6 +452,30 @@ interface TrackDao {
     suspend fun updateLastPlayed(trackId: Long, timestamp: Long)
 
     /**
+     * v0.9.13: Mark a track as saved to Spotify Liked Songs.
+     * Called by [LikeDestinationDispatcher] after a successful
+     * `PUT /v1/me/tracks` call. Forward-only; once set, never cleared
+     * by Stash (user can clear externally via Spotify Web).
+     */
+    @Query("UPDATE tracks SET spotify_saved_at = :ts WHERE id = :trackId")
+    suspend fun markSpotifySaved(trackId: Long, ts: Long)
+
+    /**
+     * v0.9.13: Mark a track as liked on YouTube Music.
+     * Called after a successful InnerTube `like/like` call.
+     */
+    @Query("UPDATE tracks SET ytmusic_saved_at = :ts WHERE id = :trackId")
+    suspend fun markYtMusicSaved(trackId: Long, ts: Long)
+
+    /**
+     * v0.9.13: Mark a track as added to the local Stash "Liked Songs"
+     * playlist. Called by [StashLikedPlaylistRepository.add] after the
+     * cross-ref is in place.
+     */
+    @Query("UPDATE tracks SET stash_liked_at = :ts WHERE id = :trackId")
+    suspend fun markStashLiked(trackId: Long, ts: Long)
+
+    /**
      * Backfill: set date_added to now for all downloaded Spotify tracks.
      * These tracks had date_added set at sync time (when discovered), not
      * download time. This one-time fix makes them appear in Recently Added.
