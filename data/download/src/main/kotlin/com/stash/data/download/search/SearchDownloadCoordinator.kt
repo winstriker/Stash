@@ -63,6 +63,7 @@ class SearchDownloadCoordinator @Inject constructor(
     private val trackFinalizer: TrackFinalizer,
     private val trackDao: com.stash.core.data.db.dao.TrackDao,
     private val musicRepository: com.stash.core.data.repository.MusicRepository,
+    private val blocklistGuard: com.stash.core.data.blocklist.BlocklistGuard,
     @ApplicationContext private val context: Context,
 ) {
     // App-lifetime scope. Class is @Singleton.
@@ -269,6 +270,18 @@ class SearchDownloadCoordinator @Inject constructor(
         finalized: TrackFinalizer.FinalizeResult.Success,
         coverArtUrl: String?,
     ) {
+        // v0.9.15: Reject blocklisted identities. Without this, tapping
+        // "Download" on a search result for a song the user previously
+        // blocked would silently resurrect the file + create a new
+        // "Your Downloads" link.
+        if (blocklistGuard.isBlocked(
+                artist = track.artist, title = track.title,
+                spotifyUri = null, youtubeId = track.videoId,
+            )) {
+            android.util.Log.d("SearchDownload", "Refused download of blocked: ${track.artist} - ${track.title}")
+            return
+        }
+
         val existing = trackDao.findByYoutubeId(track.videoId)
             ?: trackDao.findByCanonicalIdentity(
                 title = canonicalize(track.title),

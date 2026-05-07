@@ -57,6 +57,7 @@ class SwapCoordinator @Inject constructor(
     private val fileOrganizer: FileOrganizer,
     private val qualityPrefs: QualityPreferencesManager,
     private val trackDao: TrackDao,
+    private val blocklistGuard: com.stash.core.data.blocklist.BlocklistGuard,
 ) {
     companion object {
         private const val TAG = "SwapCoordinator"
@@ -84,6 +85,16 @@ class SwapCoordinator @Inject constructor(
         newVideoId: String,
     ) {
         scope.launch {
+            // v0.9.15: Reject blocklisted identities. A swap on a blocked
+            // track would re-mark it downloaded and resurrect the file.
+            if (blocklistGuard.isBlocked(
+                    artist = artist, title = title,
+                    spotifyUri = null, youtubeId = newVideoId,
+                )) {
+                Log.d(TAG, "Refused swap of blocked: $artist - $title")
+                return@launch
+            }
+
             oldFilePath?.let { oldPath ->
                 try {
                     val deleted = File(oldPath).delete()

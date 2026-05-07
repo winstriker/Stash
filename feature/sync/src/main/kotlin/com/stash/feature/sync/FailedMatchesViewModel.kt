@@ -124,6 +124,7 @@ class FailedMatchesViewModel @Inject constructor(
     private val trackDao: TrackDao,
     private val downloadQueueDao: DownloadQueueDao,
     private val swapCoordinator: SwapCoordinator,
+    private val blocklistGuard: com.stash.core.data.blocklist.BlocklistGuard,
 ) : ViewModel() {
 
     companion object {
@@ -329,6 +330,14 @@ class FailedMatchesViewModel @Inject constructor(
      */
     fun approveMatch(trackId: Long, queueEntryId: Long, candidate: ResyncCandidate) {
         viewModelScope.launch {
+            // v0.9.15: Reject blocklisted identities. Approving a match
+            // for a track the user already blocked would re-mark it
+            // downloaded and resurrect the file.
+            if (blocklistGuard.isBlockedByTrackId(trackId)) {
+                _userMessages.tryEmit("Can't approve — this track is on your blocklist.")
+                return@launch
+            }
+
             val existing = trackDao.findByYoutubeId(candidate.videoId)
             if (existing != null && existing.id != trackId) {
                 _userMessages.tryEmit(
