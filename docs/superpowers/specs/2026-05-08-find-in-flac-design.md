@@ -114,6 +114,8 @@ suspend fun upgradeToLossless(track: Track): UpgradeResult = runCatching {
 
 The mapping logic is deliberately conservative: anything other than `Success` becomes `NoMatch` (or `Error` for thrown exceptions). The user doesn't need to distinguish between "registry returned null" and "downloaded a lossless URL that came back 404" — both are "no FLAC for you right now, try later."
 
+**Phase 1 verification step:** before writing code, the implementer must enumerate the actual `TrackDownloadResult` sealed hierarchy in `DownloadManager.kt`. The pseudocode above lists `Success`, `null`, and `Deferred` explicitly with a fallthrough `else` — but the real hierarchy may include `Unmatched`, `Failed`, or other variants that need explicit branches. The compiler will enforce exhaustiveness; the spec just guarantees that any non-Success outcome maps to `NoMatch`. Confirm `TAG` is accessible in scope inside `DownloadManager` (it's a class-level companion in the existing code, so this should be a no-op — just verify).
+
 Note: `Deferred` is mapped to `NoMatch` even though it has a different semantic in the sync-pipeline context. For this user-initiated path, deferral makes no sense (we'd be writing to `WAITING_FOR_LOSSLESS` for a track the user is actively listening to — confusing). `NoMatch` is the right user-facing outcome.
 
 #### 2.2 `MusicRepository` — expose the upgrade method
@@ -170,7 +172,16 @@ internal fun snackbarCopyFor(result: UpgradeResult): String = when (result) {
 }
 ```
 
-The `track.isFlac` check is a property derived from the file format (existing field on the domain `Track` — likely something like `track.format == "flac"` or codec inspection). If that property doesn't already exist as a single-boolean accessor, add it as an extension property in this same commit; it's a one-liner.
+The `track.isFlac` check is a property derived from the file format (existing field on the domain `Track` — likely something like `track.format == "flac"` or codec inspection).
+
+**Phase 1 task (lands before the ViewModel work):** check `core/model/src/main/kotlin/com/stash/core/model/Track.kt` for an existing `isFlac` boolean accessor or equivalent. If absent, add it as an extension property:
+
+```kotlin
+val Track.isFlac: Boolean
+    get() = format.equals("flac", ignoreCase = true)
+```
+
+(or the codec-inspection equivalent, depending on which property carries the format on the domain `Track`). Treat this as a discrete plan task so it isn't lost between the ViewModel reference (§2.3) and the UI reference (§3) — both consume the same accessor.
 
 ### 3. UI
 
