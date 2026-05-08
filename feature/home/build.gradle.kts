@@ -3,6 +3,14 @@ plugins {
 }
 android {
     namespace = "com.stash.feature.home"
+
+    testOptions {
+        unitTests {
+            // Return Kotlin defaults from stubbed Android SDK methods so
+            // android.util.Log calls in production code don't throw in JVM tests.
+            isReturnDefaultValues = true
+        }
+    }
 }
 dependencies {
     implementation(project(":core:auth"))
@@ -15,4 +23,6 @@ dependencies {
     implementation(libs.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)
+
+    testImplementation("junit:junit:4.13.2")
 }
