@@ -152,6 +152,29 @@ class LastFmApiClient @Inject constructor(
         parseSimilarArtists(response["similarartists"]?.jsonObject)
     }
 
+    /**
+     * v0.9.16: Track-level similar tracks (track.getSimilar). Distinct
+     * from [getSimilarArtists] which returns artists; this returns track
+     * candidates with `(artist, title, match_score)`. Higher precision
+     * than artist-similar for vibe-matching.
+     */
+    suspend fun getSimilarTracks(
+        artist: String,
+        title: String,
+        limit: Int = 30,
+    ): Result<List<LastFmSimilarTrack>> = runCatching {
+        val params = sortedMapOf(
+            "method" to "track.getSimilar",
+            "api_key" to credentials.apiKey,
+            "artist" to artist,
+            "track" to title,
+            "limit" to limit.toString(),
+            "autocorrect" to "1",
+        )
+        val response = unsignedGet(params)
+        parseSimilarTracks(response["similartracks"]?.jsonObject)
+    }
+
     /** Top tracks for an artist — fuel for discovery downloads. */
     suspend fun getArtistTopTracks(
         artist: String,
@@ -174,21 +197,85 @@ class LastFmApiClient @Inject constructor(
      * User's all-time top artists. Used for Last.fm cold-start — when a
      * user connects an account with existing scrobble history, we seed
      * affinity from this call so their mixes are personal from day one.
+     *
+     * v0.9.16: [period] now takes a typed [LastFmPeriod]; defaults to
+     * [LastFmPeriod.OVERALL] for backward compatibility with existing
+     * cold-start callers.
      */
     suspend fun getUserTopArtists(
         username: String,
-        period: String = "overall",
+        period: LastFmPeriod = LastFmPeriod.OVERALL,
         limit: Int = 100,
     ): Result<List<LastFmTopArtist>> = runCatching {
         val params = sortedMapOf(
             "method" to "user.getTopArtists",
             "api_key" to credentials.apiKey,
             "user" to username,
-            "period" to period,
+            "period" to period.apiValue,
             "limit" to limit.toString(),
         )
         val response = unsignedGet(params)
         parseTopArtists(response["topartists"]?.jsonObject)
+    }
+
+    /**
+     * v0.9.16: User's top tracks for the given [period]. Last.fm
+     * pre-computes these — calling each period (7day/1month/3month/etc.)
+     * is the cheapest way to get a temporal slice of the user's taste
+     * without computing it ourselves.
+     */
+    suspend fun getUserTopTracks(
+        username: String,
+        period: LastFmPeriod = LastFmPeriod.ONE_MONTH,
+        limit: Int = 100,
+    ): Result<List<LastFmTopTrack>> = runCatching {
+        val params = sortedMapOf(
+            "method" to "user.getTopTracks",
+            "api_key" to credentials.apiKey,
+            "user" to username,
+            "period" to period.apiValue,
+            "limit" to limit.toString(),
+        )
+        val response = unsignedGet(params)
+        parseTopTracks(response["toptracks"]?.jsonObject)
+    }
+
+    /**
+     * v0.9.16: Tag-driven candidate generation. The Last.fm tag→artist
+     * graph is the largest in the API; this is the primary source for
+     * the "First Listen" mix and for tag-graph discovery beyond the
+     * narrow artist-similar neighborhood.
+     */
+    suspend fun getTagTopArtists(
+        tag: String,
+        limit: Int = 50,
+    ): Result<List<LastFmTopArtist>> = runCatching {
+        val params = sortedMapOf(
+            "method" to "tag.getTopArtists",
+            "api_key" to credentials.apiKey,
+            "tag" to tag,
+            "limit" to limit.toString(),
+        )
+        val response = unsignedGet(params)
+        parseTopArtists(response["topartists"]?.jsonObject)
+    }
+
+    /**
+     * v0.9.16: Top tracks for a Last.fm tag — fuel for the "First Listen"
+     * mix and other tag-graph candidate generators.
+     */
+    suspend fun getTagTopTracks(
+        tag: String,
+        limit: Int = 50,
+    ): Result<List<LastFmTopTrack>> = runCatching {
+        val params = sortedMapOf(
+            "method" to "tag.getTopTracks",
+            "api_key" to credentials.apiKey,
+            "tag" to tag,
+            "limit" to limit.toString(),
+        )
+        val response = unsignedGet(params)
+        parseTopTracks(response["tracks"]?.jsonObject)
     }
 
     /**
@@ -350,6 +437,20 @@ class LastFmApiClient @Inject constructor(
         }
     }
 
+    private fun parseSimilarTracks(root: JsonObject?): List<LastFmSimilarTrack> {
+        if (root == null) return emptyList()
+        val arr = root["track"]?.asArrayOrSingletonArray() ?: return emptyList()
+        return arr.mapNotNull { elem ->
+            val obj = elem.jsonObject
+            val title = obj["name"]?.jsonPrimitive?.content?.takeIf { it.isNotBlank() }
+                ?: return@mapNotNull null
+            val artist = obj["artist"]?.jsonObject?.get("name")?.jsonPrimitive?.content
+                ?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+            val match = obj["match"]?.jsonPrimitive?.content?.toFloatOrNull() ?: 0f
+            LastFmSimilarTrack(artist = artist, title = title, match = match)
+        }
+    }
+
     private fun parseTopTracks(root: JsonObject?): List<LastFmTopTrack> {
         if (root == null) return emptyList()
         val arr = root["track"]?.asArrayOrSingletonArray() ?: return emptyList()
@@ -400,6 +501,9 @@ data class LastFmTag(val name: String, val weight: Float)
 
 /** Parsed similar-artist from `artist.getSimilar`. [match] in 0..1. */
 data class LastFmSimilarArtist(val name: String, val match: Float)
+
+/** Parsed similar-track from `track.getSimilar`. [match] in 0..1. */
+data class LastFmSimilarTrack(val artist: String, val title: String, val match: Float)
 
 /** Track projection used by top-tracks, loved-tracks, artist top-tracks. */
 data class LastFmTopTrack(val artist: String, val title: String, val playcount: Int)
