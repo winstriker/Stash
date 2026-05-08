@@ -293,7 +293,7 @@ class DownloadManager @Inject constructor(
             .onFailure { Log.w(TAG, "isTrackInStashMix lookup failed for $trackId", it) }
             .getOrDefault(false)
 
-    private suspend fun tryLosslessDownload(track: Track, forced: Boolean = false): TrackDownloadResult? {
+    internal suspend fun tryLosslessDownload(track: Track, forced: Boolean = false): TrackDownloadResult? {
         val query = TrackQuery(
             artist = track.artist,
             title = track.title,
