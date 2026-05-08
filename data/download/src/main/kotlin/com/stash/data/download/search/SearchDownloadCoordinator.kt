@@ -8,10 +8,13 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
 import androidx.media3.datasource.cache.CacheKeyFactory
 import androidx.media3.datasource.cache.SimpleCache
+import com.stash.core.data.db.dao.DownloadQueueDao
+import com.stash.core.model.DownloadStatus
 import com.stash.core.model.TrackItem
 import com.stash.data.download.DownloadExecutor
 import com.stash.data.download.DownloadResult
 import com.stash.data.download.lossless.AudioFormat
+import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
 import com.stash.data.download.lossless.SourceResult
 import com.stash.data.download.lossless.TrackQuery
@@ -65,6 +68,15 @@ class SearchDownloadCoordinator @Inject constructor(
     private val musicRepository: com.stash.core.data.repository.MusicRepository,
     private val blocklistGuard: com.stash.core.data.blocklist.BlocklistGuard,
     @ApplicationContext private val context: Context,
+    /**
+     * v0.9.17: Used by the strict-FLAC defer branch. When the lossless
+     * registry can't serve the track and the user has yt-dlp fallback off,
+     * the coordinator emits [SearchDownloadStatus.WaitingForLossless] and
+     * marks the queue row [DownloadStatus.WAITING_FOR_LOSSLESS] instead
+     * of falling through to yt-dlp.
+     */
+    private val losslessPrefs: LosslessSourcePreferences,
+    private val downloadQueueDao: DownloadQueueDao,
 ) {
     // App-lifetime scope. Class is @Singleton.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -88,6 +100,15 @@ class SearchDownloadCoordinator @Inject constructor(
      *   [SearchDownloadStatus.Resolving] → [SearchDownloadStatus.Downloading] →
      *   [SearchDownloadStatus.Completed] | [SearchDownloadStatus.Failed]
      *
+     * v0.9.17 strict-FLAC: when the lossless registry returns null AND
+     * [LosslessSourcePreferences.youtubeFallbackEnabledNow] is false the
+     * sequence shortens to:
+     *   [SearchDownloadStatus.Resolving] → [SearchDownloadStatus.WaitingForLossless]
+     *
+     * No Stash-Mix exemption here — the search-tab pipeline is always an
+     * explicit user action on a specific track, so the user's fallback
+     * preference governs unconditionally.
+     *
      * The flow does not throw; all errors are mapped to [SearchDownloadStatus.Failed].
      */
     fun download(track: TrackItem): Flow<SearchDownloadStatus> = flow {
@@ -99,15 +120,21 @@ class SearchDownloadCoordinator @Inject constructor(
         }
 
         try {
-            val job = deferred.await()
-            // Signal which source is delivering bytes now that resolution is done.
-            emit(SearchDownloadStatus.Downloading(job.source))
-            emit(
-                when (val r = job.outcome) {
-                    is TrackFinalizer.FinalizeResult.Success -> SearchDownloadStatus.Completed
-                    is TrackFinalizer.FinalizeResult.Failed -> SearchDownloadStatus.Failed(r.message)
+            when (val job = deferred.await()) {
+                is DownloadJobResult.Resolved -> {
+                    // Signal which source is delivering bytes now that resolution is done.
+                    emit(SearchDownloadStatus.Downloading(job.source))
+                    emit(
+                        when (val r = job.outcome) {
+                            is TrackFinalizer.FinalizeResult.Success -> SearchDownloadStatus.Completed
+                            is TrackFinalizer.FinalizeResult.Failed -> SearchDownloadStatus.Failed(r.message)
+                        }
+                    )
                 }
-            )
+                is DownloadJobResult.Deferred -> {
+                    emit(SearchDownloadStatus.WaitingForLossless)
+                }
+            }
         } finally {
             // Remove on completion OR cancellation — ensures the map never
             // holds a reference to a completed/cancelled Deferred.
@@ -126,17 +153,47 @@ class SearchDownloadCoordinator @Inject constructor(
             }
             .getOrNull()
 
-        return if (match != null && match.confidence >= MIN_SEARCH_CONFIDENCE) {
-            DownloadJobResult(
+        if (match != null && match.confidence >= MIN_SEARCH_CONFIDENCE) {
+            return DownloadJobResult.Resolved(
                 source = SearchDownloadStatus.Source.LOSSLESS,
                 outcome = finalizeFromLossless(track, match),
             )
-        } else {
-            DownloadJobResult(
-                source = SearchDownloadStatus.Source.YOUTUBE,
-                outcome = finalizeFromYtDlp(track),
-            )
         }
+
+        // v0.9.17 strict-FLAC defer branch — mirrors DownloadManager.
+        // No Stash-Mix exemption: search-tab is always an explicit user
+        // action, so the fallback pref governs unconditionally.
+        if (!losslessPrefs.youtubeFallbackEnabledNow()) {
+            Log.i(
+                TAG,
+                "deferring search download '${track.artist} - ${track.title}': lossless unavailable, fallback off",
+            )
+            // Mark the queue row WAITING_FOR_LOSSLESS so the retry scheduler
+            // (Task 9) can pick it up later. Lookup is best-effort and
+            // chained on the local Track row — the search-tab path bypasses
+            // download_queue for fresh tracks, so most search defers won't
+            // find a row here. The write only matters when the user re-taps
+            // Download on a track the sync pipeline previously deferred.
+            runCatching {
+                val trackId = trackDao.findByYoutubeId(track.videoId)?.id
+                if (trackId != null) {
+                    downloadQueueDao.getByTrackId(trackId)?.let { row ->
+                        downloadQueueDao.updateStatus(
+                            id = row.id,
+                            status = DownloadStatus.WAITING_FOR_LOSSLESS,
+                        )
+                    }
+                }
+            }.onFailure { e ->
+                Log.w(TAG, "WAITING_FOR_LOSSLESS DAO write failed for ${track.videoId}: ${e.message}")
+            }
+            return DownloadJobResult.Deferred
+        }
+
+        return DownloadJobResult.Resolved(
+            source = SearchDownloadStatus.Source.YOUTUBE,
+            outcome = finalizeFromYtDlp(track),
+        )
     }
 
     // -------------------------------------------------------------------------
@@ -372,11 +429,23 @@ class SearchDownloadCoordinator @Inject constructor(
         youtubeId = videoId,
     )
 
-    /** Pairs a [SearchDownloadStatus.Source] with the [TrackFinalizer.FinalizeResult]. */
-    private data class DownloadJobResult(
-        val source: SearchDownloadStatus.Source,
-        val outcome: TrackFinalizer.FinalizeResult,
-    )
+    /**
+     * Outcome of [performDownload]. Either:
+     *  - [Resolved]: a source was chosen and bytes were finalized (or
+     *    finalization failed) — flow emits Downloading + Completed/Failed.
+     *  - [Deferred]: v0.9.17 strict-FLAC defer — registry returned null and
+     *    the user has yt-dlp fallback off — flow emits WaitingForLossless.
+     */
+    private sealed interface DownloadJobResult {
+        /** Pairs a [SearchDownloadStatus.Source] with the [TrackFinalizer.FinalizeResult]. */
+        data class Resolved(
+            val source: SearchDownloadStatus.Source,
+            val outcome: TrackFinalizer.FinalizeResult,
+        ) : DownloadJobResult
+
+        /** v0.9.17: lossless unavailable + fallback off → WaitingForLossless. */
+        data object Deferred : DownloadJobResult
+    }
 
     companion object {
         private const val TAG = "SearchDownloadCoordinator"

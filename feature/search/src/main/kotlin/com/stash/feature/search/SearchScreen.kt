@@ -103,6 +103,7 @@ fun SearchScreen(
     val previewState by viewModel.delegate.previewState.collectAsStateWithLifecycle()
     val downloadingIds by viewModel.delegate.downloadingIds.collectAsStateWithLifecycle()
     val downloadedIds by viewModel.delegate.downloadedIds.collectAsStateWithLifecycle()
+    val waitingForLosslessIds by viewModel.delegate.waitingForLosslessIds.collectAsStateWithLifecycle()
     val previewLoadingId by viewModel.delegate.previewLoadingId.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -137,6 +138,7 @@ fun SearchScreen(
                     sections = status.sections,
                     downloadingIds = downloadingIds,
                     downloadedIds = downloadedIds,
+                    waitingForLosslessIds = waitingForLosslessIds,
                     previewLoadingId = previewLoadingId,
                     previewState = previewState,
                     losslessPrefetcher = viewModel.losslessPrefetcher,
@@ -240,6 +242,7 @@ private fun SectionedResultsList(
     sections: List<SearchResultSection>,
     downloadingIds: Set<String>,
     downloadedIds: Set<String>,
+    waitingForLosslessIds: Set<String>,
     previewLoadingId: String?,
     previewState: PreviewState,
     losslessPrefetcher: LosslessUrlPrefetcher,
@@ -324,6 +327,7 @@ private fun SectionedResultsList(
                             item = item,
                             isDownloading = t.videoId in downloadingIds,
                             isDownloaded = t.videoId in downloadedIds,
+                            isWaitingForLossless = t.videoId in waitingForLosslessIds,
                             isPreviewLoading = previewLoadingId == t.videoId,
                             isPreviewPlaying = previewState is PreviewState.Playing &&
                                 previewState.videoId == t.videoId,

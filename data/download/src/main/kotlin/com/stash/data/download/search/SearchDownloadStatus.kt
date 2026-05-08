@@ -20,6 +20,15 @@ sealed interface SearchDownloadStatus {
 
     data class Failed(val message: String) : SearchDownloadStatus
 
+    /**
+     * v0.9.17+: lossless registry couldn't serve the track and the user
+     * has yt-dlp fallback off. The track sits under
+     * [com.stash.core.model.DownloadStatus.WAITING_FOR_LOSSLESS] in the
+     * queue; the search-tab UI surfaces this distinct from [Failed] so
+     * the user knows it's a deferral, not a problem.
+     */
+    data object WaitingForLossless : SearchDownloadStatus
+
     /** Which path delivered the bytes, for UI labelling. */
     enum class Source { LOSSLESS, YOUTUBE }
 }

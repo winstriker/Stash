@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -58,6 +59,15 @@ fun PreviewDownloadRow(
     onStopPreview: () -> Unit,
     onDownload: () -> Unit,
     modifier: Modifier = Modifier,
+    /**
+     * v0.9.17: Track is queued under WAITING_FOR_LOSSLESS — lossless source
+     * was unavailable AND the user has yt-dlp fallback off. Renders an
+     * outlined-clock icon in the download slot to distinguish from a hard
+     * Failed state. Defaults to `false` so the param is backward compatible
+     * for callers (PopularTracksSection, AlbumDiscoveryScreen) that haven't
+     * threaded the new state yet.
+     */
+    isWaitingForLossless: Boolean = false,
 ) {
     val extendedColors = StashTheme.extendedColors
 
@@ -172,6 +182,18 @@ fun PreviewDownloadRow(
                         modifier = Modifier.size(24.dp),
                         strokeWidth = 2.5.dp,
                         color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                isWaitingForLossless -> {
+                    // v0.9.17: deferred — lossless unavailable, fallback off.
+                    // Outlined clock signals "queued for retry," distinct from
+                    // the red Failed treatment. Tint with onSurfaceVariant so
+                    // it reads as informational rather than alerting.
+                    Icon(
+                        imageVector = Icons.Outlined.Schedule,
+                        contentDescription = "Waiting for lossless source",
+                        modifier = Modifier.size(24.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 else -> {

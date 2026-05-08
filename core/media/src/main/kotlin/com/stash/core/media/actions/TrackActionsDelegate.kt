@@ -71,6 +71,17 @@ class TrackActionsDelegate @Inject constructor(
      *  flight). UI shows a row-level spinner for this id. */
     val previewLoadingId: StateFlow<String?> = _previewLoadingId.asStateFlow()
 
+    private val _waitingForLosslessIds = MutableStateFlow<Set<String>>(emptySet())
+    /**
+     * v0.9.17+: VideoIds whose download was deferred because the lossless
+     * registry returned no match AND the user has yt-dlp fallback off. The
+     * UI surfaces this with a clock icon (distinct from the red Failed
+     * treatment) so the user knows the track is queued for retry, not
+     * permanently broken. Cleared when the user taps the row again or the
+     * retry succeeds.
+     */
+    val waitingForLosslessIds: StateFlow<Set<String>> = _waitingForLosslessIds.asStateFlow()
+
     private var boundScope: CoroutineScope? = null
 
     /**
@@ -288,10 +299,20 @@ class TrackActionsDelegate @Inject constructor(
                         is SearchDownloadStatus.Completed -> {
                             _downloadingIds.update { it - key }
                             _downloadedIds.update { it + key }
+                            _waitingForLosslessIds.update { it - key }
                         }
                         is SearchDownloadStatus.Failed -> {
                             _downloadingIds.update { it - key }
                             _userMessages.tryEmit("Download failed: ${status.message}")
+                        }
+                        is SearchDownloadStatus.WaitingForLossless -> {
+                            // v0.9.17 strict-FLAC: lossless unavailable + fallback
+                            // off. Don't emit a Failed snackbar — the row keeps
+                            // a "waiting" indicator until the retry scheduler
+                            // (Task 9) succeeds or the user changes prefs.
+                            _downloadingIds.update { it - key }
+                            _waitingForLosslessIds.update { it + key }
+                            _userMessages.tryEmit("Waiting for lossless source…")
                         }
                     }
                 }
