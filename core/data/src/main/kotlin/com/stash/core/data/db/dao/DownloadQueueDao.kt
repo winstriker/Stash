@@ -55,6 +55,14 @@ interface DownloadQueueDao {
     @Query("SELECT * FROM download_queue WHERE track_id = :trackId LIMIT 1")
     suspend fun getByTrackId(trackId: Long): DownloadQueueEntity?
 
+    /** Reactive count of tracks deferred because no lossless source could serve them. */
+    @Query("SELECT COUNT(*) FROM download_queue WHERE status = 'WAITING_FOR_LOSSLESS'")
+    fun waitingForLosslessCount(): Flow<Int>
+
+    /** All deferred entries, for [LosslessRetryWorker] to re-resolve. */
+    @Query("SELECT * FROM download_queue WHERE status = 'WAITING_FOR_LOSSLESS' ORDER BY created_at ASC")
+    suspend fun waitingForLosslessTracks(): List<DownloadQueueEntity>
+
     /** Retrieve all pending downloads for a specific sync run, ordered by creation time. */
     @Query("SELECT * FROM download_queue WHERE sync_id = :syncId AND status = 'PENDING' ORDER BY created_at ASC")
     suspend fun getPendingBySyncId(syncId: Long): List<DownloadQueueEntity>
@@ -170,6 +178,17 @@ interface DownloadQueueDao {
     suspend fun resetStaleInProgress(): Int
 
     /**
+     * Bulk requeue: flip every WAITING_FOR_LOSSLESS row back to PENDING.
+     * Called when the user disables lossless or enables YouTube fallback —
+     * the deferred state only makes sense under "lossless on + fallback off",
+     * so any other configuration should release the queue.
+     *
+     * @return number of rows flipped.
+     */
+    @Query("UPDATE download_queue SET status = 'PENDING' WHERE status = 'WAITING_FOR_LOSSLESS'")
+    suspend fun requeueWaitingForLossless(): Int
+
+    /**
      * Cancel all pending/in-progress downloads for tracks from a specific source.
      * Called when the user disconnects a service (Spotify/YouTube) to prevent
      * stale downloads from clogging the queue.
@@ -245,12 +264,12 @@ interface DownloadQueueDao {
     suspend fun getUnqueuedTrackIds(sources: List<String>): List<Long>
 
     /**
-     * Self-healing sweep: delete PENDING/FAILED queue entries for tracks
-     * whose only parent playlists are sync-disabled. Runs at the start of
-     * each [TrackDownloadWorker] run to evict the stale rows that prior
-     * (pre-fix) syncs left behind. Without this, the user's queue stays
-     * bloated with thousands of phantom downloads even after the predicate
-     * fix lands.
+     * Self-healing sweep: delete PENDING/FAILED/WAITING_FOR_LOSSLESS queue
+     * entries for tracks whose only parent playlists are sync-disabled.
+     * Runs at the start of each [TrackDownloadWorker] run to evict the
+     * stale rows that prior (pre-fix) syncs left behind. Without this,
+     * the user's queue stays bloated with thousands of phantom downloads
+     * even after the predicate fix lands.
      *
      * Spares any track that is still a member of at least one currently
      * sync-enabled playlist, and any IN_PROGRESS row (which the worker is
@@ -259,11 +278,15 @@ interface DownloadQueueDao {
      * "must live in a sync-enabled playlist" contract enforced by the
      * other queries.
      *
+     * v0.9.17: extended to also evict WAITING_FOR_LOSSLESS deferred rows
+     * — they're queue entries with the same orphan semantics, just paused
+     * waiting for a lossless source instead of actively pending.
+     *
      * @return Number of rows deleted.
      */
     @Query("""
         DELETE FROM download_queue
-        WHERE status IN ('PENDING', 'FAILED')
+        WHERE status IN ('PENDING', 'FAILED', 'WAITING_FOR_LOSSLESS')
           AND track_id NOT IN (
               SELECT pt.track_id FROM playlist_tracks pt
               INNER JOIN playlists p ON p.id = pt.playlist_id
