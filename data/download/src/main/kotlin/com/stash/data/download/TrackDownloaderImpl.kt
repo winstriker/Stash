@@ -23,6 +23,13 @@ class TrackDownloaderImpl @Inject constructor(
             is TrackDownloadResult.Success -> TrackDownloadOutcome.Success(result.filePath)
             is TrackDownloadResult.Unmatched -> TrackDownloadOutcome.Unmatched(result.rejectedVideoId)
             is TrackDownloadResult.Failed -> TrackDownloadOutcome.Failed(result.error)
+            // v0.9.17: Deferred is the strict-FLAC stay-in-queue signal.
+            // Task 5 translates this into a DownloadStatus.WAITING_FOR_LOSSLESS
+            // DAO write so the track persists in the queue until the
+            // LosslessRetryWorker re-resolves. Until that lands, surface as
+            // Failed so the worker doesn't silently lose the track.
+            TrackDownloadResult.Deferred ->
+                TrackDownloadOutcome.Failed("deferred: lossless unavailable, fallback off")
         }
     }
 }

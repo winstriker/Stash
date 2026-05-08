@@ -45,6 +45,14 @@ sealed class TrackDownloadResult {
 
     /** Download failed. [error] describes why. */
     data class Failed(val error: String) : TrackDownloadResult()
+
+    /**
+     * v0.9.17+: lossless registry returned null and the user opted out
+     * of yt-dlp fallback. The track stays in the queue under
+     * DownloadStatus.WAITING_FOR_LOSSLESS until LosslessRetryWorker
+     * re-resolves successfully.
+     */
+    data object Deferred : TrackDownloadResult()
 }
 
 /**
@@ -139,6 +147,20 @@ class DownloadManager @Inject constructor(
             if (forceLossless || losslessPrefs.enabledNow()) {
                 val losslessResult = tryLosslessDownload(track, forced = forceLossless)
                 if (losslessResult != null) return losslessResult
+                // v0.9.17 strict-FLAC: when lossless returned null AND
+                // fallback is off, defer instead of falling through to
+                // yt-dlp. Stash-mix tracks (forceLossless=true) are
+                // exempt — they're a small curated rotating playlist
+                // and would silently empty if stuck in deferral, so
+                // they keep the legacy "fall back to yt-dlp on failure"
+                // semantics regardless of the global toggle.
+                if (!forceLossless && !losslessPrefs.youtubeFallbackEnabledNow()) {
+                    Log.i(
+                        TAG,
+                        "deferring '${track.artist} - ${track.title}': lossless unavailable, fallback off",
+                    )
+                    return TrackDownloadResult.Deferred
+                }
             }
         }
 
