@@ -35,6 +35,7 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
+import androidx.work.await
 import androidx.work.workDataOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -423,12 +424,54 @@ class HomeViewModel @Inject constructor(
      * the work.
      */
     fun onRetryDeferredRequested() {
-        val request = OneTimeWorkRequestBuilder<LosslessRetryWorker>().build()
-        WorkManager.getInstance(context).enqueueUniqueWork(
-            LosslessRetryWorker.UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.KEEP,
-            request,
-        )
+        viewModelScope.launch {
+            // Snapshot the current count before we kick the worker so the
+            // start message and the math after both reference the same N.
+            val countAtStart = downloadQueueDao.waitingForLosslessCount().first()
+            if (countAtStart <= 0) return@launch  // banner shouldn't be visible
+
+            _userMessages.tryEmit("Looking for FLAC versions of $countAtStart tracks\u2026")
+
+            val request = OneTimeWorkRequestBuilder<LosslessRetryWorker>().build()
+            // KEEP policy: a rapid double-tap coalesces. Suspend on the
+            // Operation's await() (work-runtime-ktx) so we don't block the
+            // viewModelScope's Main.immediate dispatcher.
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                LosslessRetryWorker.UNIQUE_WORK_NAME,
+                ExistingWorkPolicy.KEEP,
+                request,
+            ).await()
+
+            // Observe the unique-work Flow. Filter to OUR enqueued request's
+            // id so historical entries from earlier sessions don't fire stale
+            // "Resolved …" Toasts. Under KEEP policy a coalesced tap will see
+            // the SAME id as the in-flight work, so this still drains correctly
+            // on every tap.
+            WorkManager.getInstance(context)
+                .getWorkInfosForUniqueWorkFlow(LosslessRetryWorker.UNIQUE_WORK_NAME)
+                .firstOrNull { infos ->
+                    val ours = infos.firstOrNull { it.id == request.id } ?: return@firstOrNull false
+                    when (ours.state) {
+                        WorkInfo.State.SUCCEEDED -> {
+                            val resolved = ours.outputData.getInt(LosslessRetryWorker.KEY_RESOLVED, 0)
+                            val total = ours.outputData.getInt(LosslessRetryWorker.KEY_TOTAL, 0)
+                            val message = if (resolved == 0) {
+                                "None resolved this time \u2014 we'll keep trying."
+                            } else {
+                                val remaining = total - resolved
+                                "Resolved $resolved/$total. $remaining still waiting."
+                            }
+                            _userMessages.tryEmit(message)
+                            true
+                        }
+                        WorkInfo.State.FAILED, WorkInfo.State.CANCELLED -> {
+                            _userMessages.tryEmit("Sweep failed \u2014 try again later")
+                            true
+                        }
+                        else -> false
+                    }
+                }
+        }
     }
 
     /**
