@@ -35,7 +35,6 @@ import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
-import androidx.work.await
 import androidx.work.workDataOf
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -566,12 +565,16 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * v0.9.16: Manually re-run the Stash Mix refresh worker for a single
-     * recipe (the one whose materialized playlist is [playlistId]). Used by
-     * the long-press "Refresh this mix" action on Stash Mix cards. No-op if
-     * the playlist doesn't belong to a Stash Mix recipe — the menu item is
-     * already gated on `playlist.type == STASH_MIX`, so the lookup miss is
-     * a defensive guard, not a user-facing error path.
+     * Manually re-run the Stash Mix refresh worker for a single recipe (the
+     * one whose materialized playlist is [playlistId]). Used by the long-
+     * press "Refresh this mix" action on Stash Mix cards.
+     *
+     * Emits snackbar lifecycle messages via [userMessages]: "Refreshing X…"
+     * on enqueue, then "Refreshed X" or "Refresh failed" on the worker's
+     * terminal WorkInfo state. If the playlist is tagged `STASH_MIX` but no
+     * recipe back-links it (data-integrity bug — menu shouldn't have
+     * appeared), logs a warning and surfaces a "not linked to a recipe"
+     * message instead of silently no-opping.
      */
     fun refreshMix(playlistId: Long) {
         viewModelScope.launch {
