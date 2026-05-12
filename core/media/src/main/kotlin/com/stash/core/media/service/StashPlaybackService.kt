@@ -9,15 +9,27 @@ import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.session.CommandButton
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
 import androidx.media3.session.SessionResult
+import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.stash.core.data.db.dao.TrackDao
+import com.stash.core.data.social.stash.StashLikedPlaylistRepository
+import com.stash.core.media.R
 import com.stash.core.media.equalizer.EqController
 import com.stash.core.media.equalizer.StashRenderersFactory
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -27,11 +39,17 @@ import javax.inject.Inject
  * Custom session commands:
  * - [COMMAND_TOGGLE_SHUFFLE] -- toggles shuffle mode on/off
  * - [COMMAND_CYCLE_REPEAT]   -- cycles repeat mode: OFF -> ALL -> ONE -> OFF
+ * - [COMMAND_TOGGLE_LIKE]    -- toggles Stash Liked Songs membership for the
+ *   currently playing track. Surfaced as a heart icon in the system
+ *   notification (expanded view) so the user can like/unlike from the
+ *   lockscreen without opening Now Playing.
  */
 @AndroidEntryPoint
 class StashPlaybackService : MediaSessionService() {
 
     @Inject lateinit var eqController: EqController
+    @Inject lateinit var trackDao: TrackDao
+    @Inject lateinit var stashLikedRepository: StashLikedPlaylistRepository
 
     companion object {
         /** Custom command action for toggling shuffle mode. */
@@ -39,9 +57,18 @@ class StashPlaybackService : MediaSessionService() {
 
         /** Custom command action for cycling repeat mode. */
         const val COMMAND_CYCLE_REPEAT = "com.stash.CYCLE_REPEAT"
+
+        /** Custom command action for toggling Stash Liked on the current track. */
+        const val COMMAND_TOGGLE_LIKE = "com.stash.TOGGLE_LIKE"
     }
 
     private var mediaSession: MediaSession? = null
+
+    // Service-scoped CoroutineScope for the like-state observer + toggle
+    // suspending calls. Cancelled in onDestroy so the observer doesn't leak
+    // when the service stops.
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private var likeObserverJob: Job? = null
 
     @OptIn(UnstableApi::class)
     override fun onCreate() {
@@ -102,6 +129,64 @@ class StashPlaybackService : MediaSessionService() {
         val session = sessionBuilder.build()
 
         mediaSession = session
+
+        // Heart-button wiring: rebuild the notification's custom layout
+        // whenever the playing track changes so the icon (filled vs.
+        // outlined) reflects the new track's Stash-Liked state. The
+        // per-track observe loop inside [refreshLikeButton] keeps the
+        // icon in sync if the user toggles like from elsewhere
+        // (Now Playing, Library, etc.) while audio is playing.
+        player.addListener(object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                refreshLikeButton()
+            }
+        })
+        refreshLikeButton()
+    }
+
+    /**
+     * Cancels any existing like-state observer and starts a new one for
+     * the player's current media item. Each emission rebuilds the
+     * MediaSession's custom layout with the appropriate heart icon.
+     * When there's no current track the custom layout is cleared so the
+     * notification doesn't render a stale heart.
+     */
+    @OptIn(UnstableApi::class)
+    private fun refreshLikeButton() {
+        likeObserverJob?.cancel()
+        val session = mediaSession ?: return
+        val trackId = session.player.currentMediaItem?.mediaId?.toLongOrNull()
+        if (trackId == null) {
+            session.setCustomLayout(ImmutableList.of())
+            return
+        }
+        likeObserverJob = serviceScope.launch {
+            trackDao.observeLikeState(trackId).collect { state ->
+                val isLiked = state?.stashLikedAt != null
+                session.setCustomLayout(ImmutableList.of(buildLikeButton(isLiked)))
+            }
+        }
+    }
+
+    @OptIn(UnstableApi::class)
+    private fun buildLikeButton(isLiked: Boolean): CommandButton {
+        val iconRes = if (isLiked) {
+            R.drawable.ic_notification_heart_filled
+        } else {
+            R.drawable.ic_notification_heart_outlined
+        }
+        val displayNameRes = if (isLiked) {
+            R.string.notification_action_unlike
+        } else {
+            R.string.notification_action_like
+        }
+        return CommandButton.Builder()
+            .setDisplayName(getString(displayNameRes))
+            .setIconResId(iconRes)
+            .setSessionCommand(
+                SessionCommand(COMMAND_TOGGLE_LIKE, android.os.Bundle.EMPTY),
+            )
+            .build()
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? {
@@ -117,6 +202,8 @@ class StashPlaybackService : MediaSessionService() {
     }
 
     override fun onDestroy() {
+        likeObserverJob?.cancel()
+        serviceScope.cancel()
         mediaSession?.run {
             player.release()
             release()
@@ -161,6 +248,7 @@ class StashPlaybackService : MediaSessionService() {
             val customCommands = listOf(
                 SessionCommand(COMMAND_TOGGLE_SHUFFLE, /* extras = */ android.os.Bundle.EMPTY),
                 SessionCommand(COMMAND_CYCLE_REPEAT, /* extras = */ android.os.Bundle.EMPTY),
+                SessionCommand(COMMAND_TOGGLE_LIKE, /* extras = */ android.os.Bundle.EMPTY),
             )
             val sessionCommands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
             customCommands.forEach { sessionCommands.add(it) }
@@ -200,6 +288,22 @@ class StashPlaybackService : MediaSessionService() {
                         Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
                         Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
                         else -> Player.REPEAT_MODE_OFF
+                    }
+                }
+                COMMAND_TOGGLE_LIKE -> {
+                    // Read the mediaId on the caller thread (Player APIs are
+                    // main-thread-only) but do the DAO/repo work in the
+                    // service scope so the callback returns immediately.
+                    val trackId = session.player.currentMediaItem?.mediaId?.toLongOrNull()
+                    if (trackId != null) {
+                        serviceScope.launch {
+                            val current = trackDao.observeLikeState(trackId).firstOrNull()
+                            if (current?.stashLikedAt != null) {
+                                stashLikedRepository.remove(trackId)
+                            } else {
+                                stashLikedRepository.add(trackId)
+                            }
+                        }
                     }
                 }
             }
