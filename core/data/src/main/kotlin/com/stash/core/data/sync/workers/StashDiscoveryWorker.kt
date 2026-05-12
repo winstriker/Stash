@@ -6,7 +6,9 @@ import androidx.hilt.work.HiltWorker
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
@@ -65,6 +67,7 @@ class StashDiscoveryWorker @AssistedInject constructor(
     companion object {
         private const val TAG = "StashDiscovery"
         private const val WORK_NAME = "stash_discovery"
+        private const val ONE_SHOT_WORK_NAME = "stash_discovery_oneshot"
         private const val BATCH_SIZE = 60
         // Raised from 30 → 100 on 2026-04-22. With Stash Discover at 100%
         // discovery ratio + targetLength=50, a 30/week drain couldn't
@@ -94,6 +97,26 @@ class StashDiscoveryWorker @AssistedInject constructor(
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
                 ExistingPeriodicWorkPolicy.UPDATE,
+                work,
+            )
+        }
+
+        /**
+         * Fire a one-shot discovery sweep — manual user trigger, no charging
+         * requirement. Respects [DownloadNetworkMode] for cellular gating via
+         * [constraintsForManualTrigger]. Unique work name + REPLACE policy so a
+         * rapid double-tap coalesces. At the end of [doWork], the existing
+         * v0.9.20 chain to [DiscoveryDownloadWorker] fires, completing the
+         * pipeline: discovery_queue PENDING → stubs + download_queue PENDING →
+         * actual downloads.
+         */
+        fun enqueueOneTime(context: Context, mode: DownloadNetworkMode) {
+            val work = OneTimeWorkRequestBuilder<StashDiscoveryWorker>()
+                .setConstraints(constraintsForManualTrigger(mode))
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                ONE_SHOT_WORK_NAME,
+                ExistingWorkPolicy.REPLACE,
                 work,
             )
         }
