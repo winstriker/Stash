@@ -378,6 +378,18 @@ class SearchDownloadCoordinator @Inject constructor(
             }
         }
 
+        // Loudness measurement (LUFS + true peak) was performed by TrackFinalizer
+        // as part of finalizeFile. Persist on the same row so the player can
+        // compute makeup gain without a round-trip through the backfill worker.
+        // Null = ebur128 couldn't parse a Summary block (very short file,
+        // ffmpeg failure); leaving the columns NULL lets LoudnessBackfillWorker
+        // pick the row up later.
+        finalized.loudness?.let { l ->
+            runCatching {
+                trackDao.updateLoudness(trackId, l.lufs, l.truePeakDbfs, System.currentTimeMillis())
+            }.onFailure { e -> Log.w(TAG, "updateLoudness failed: ${e.message}") }
+        }
+
         coverArtUrl?.let {
             runCatching { trackDao.fillMissingAlbumArtUrl(trackId, it) }
                 .onFailure { e -> Log.w(TAG, "fillMissingAlbumArtUrl failed: ${e.message}") }

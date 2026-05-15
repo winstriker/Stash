@@ -214,4 +214,37 @@ data class TrackEntity(
      */
     @ColumnInfo(name = "lastfm_user_loved", defaultValue = "0")
     val lastfmUserLoved: Boolean = false,
+
+    /**
+     * v0.9.25: Integrated loudness in LUFS (ITU-R BS.1770-4 / EBU R128).
+     * NULL = measurement not yet attempted. `Float.NaN` = measurement
+     * attempted-and-failed sentinel — distinguishable from "never tried"
+     * so the backfill worker can retry on a new algorithm version or
+     * skip permanently-broken files. Typical range is roughly -30 to -6
+     * LUFS; pop masters cluster around -8 to -14, streaming targets are
+     * -14 (Spotify) to -16 (Apple/YouTube).
+     */
+    @ColumnInfo(name = "loudness_lufs")
+    val loudnessLufs: Float? = null,
+
+    /**
+     * v0.9.25: True-peak (sample-peak) level in dBFS, always negative or
+     * zero. NULL = not measured. Used by the soft-clip limiter to derive
+     * the maximum safe gain before reconstruction overs would clip the
+     * output. Captured alongside [loudnessLufs] in the same FFmpeg
+     * ebur128 pass.
+     */
+    @ColumnInfo(name = "true_peak_dbfs")
+    val truePeakDbfs: Float? = null,
+
+    /**
+     * v0.9.25: Epoch-millis timestamp of the loudness-measurement
+     * attempt (success OR failure). NULL = never attempted. Lets the
+     * backfill worker run a "stale measurement" sweep if the BS.1770
+     * implementation ever changes, and powers the weekly resurrection
+     * query that re-attempts NaN-marked rows in case a transient
+     * decode failure cleared up.
+     */
+    @ColumnInfo(name = "loudness_measured_at")
+    val loudnessMeasuredAt: Long? = null,
 )

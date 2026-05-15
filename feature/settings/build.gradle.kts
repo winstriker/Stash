@@ -22,6 +22,9 @@ dependencies {
     // For the "Fix wrong-version downloads" backfill trigger in Settings,
     // which enqueues YtLibraryBackfillWorker via WorkManager.
     implementation(libs.work.runtime.ktx)
+    // For LoudnessFirstRunStore — shares the app-wide DataStore<Preferences>
+    // with LoudnessStore / LoudnessProgressStore in :core:data and :core:media.
+    implementation(libs.datastore.preferences)
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.1")

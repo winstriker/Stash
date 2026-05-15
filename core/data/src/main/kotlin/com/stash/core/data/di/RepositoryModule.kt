@@ -1,5 +1,7 @@
 package com.stash.core.data.di
 
+import com.stash.core.data.audio.FFmpegBridge
+import com.stash.core.data.audio.FFmpegBridgeImpl
 import com.stash.core.data.prefs.StoragePreference
 import com.stash.core.data.prefs.StoragePreferencesManager
 import com.stash.core.data.prefs.ThemePreference
@@ -37,4 +39,8 @@ abstract class RepositoryModule {
     @Binds
     @Singleton
     abstract fun bindPingSubmitter(impl: OkHttpPingSubmitter): PingSubmitter
+
+    @Binds
+    @Singleton
+    abstract fun bindFFmpegBridge(impl: FFmpegBridgeImpl): FFmpegBridge
 }

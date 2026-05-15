@@ -21,7 +21,9 @@ import com.stash.core.data.db.dao.TrackDao
 import com.stash.core.data.social.stash.StashLikedPlaylistRepository
 import com.stash.core.media.R
 import com.stash.core.media.equalizer.EqController
+import com.stash.core.media.equalizer.LoudnessController
 import com.stash.core.media.equalizer.StashRenderersFactory
+import com.stash.core.media.equalizer.computeGain
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +50,7 @@ import javax.inject.Inject
 class StashPlaybackService : MediaSessionService() {
 
     @Inject lateinit var eqController: EqController
+    @Inject lateinit var loudnessController: LoudnessController
     @Inject lateinit var trackDao: TrackDao
     @Inject lateinit var stashLikedRepository: StashLikedPlaylistRepository
 
@@ -101,7 +104,7 @@ class StashPlaybackService : MediaSessionService() {
             .build()
 
         val player = ExoPlayer.Builder(this)
-            .setRenderersFactory(StashRenderersFactory(this, eqController))
+            .setRenderersFactory(StashRenderersFactory(this, eqController, loudnessController))
             .setLoadControl(loadControl)
             .setAudioAttributes(audioAttributes, /* handleAudioFocus = */ true)
             .setHandleAudioBecomingNoisy(true)
@@ -130,18 +133,43 @@ class StashPlaybackService : MediaSessionService() {
 
         mediaSession = session
 
-        // Heart-button wiring: rebuild the notification's custom layout
-        // whenever the playing track changes so the icon (filled vs.
-        // outlined) reflects the new track's Stash-Liked state. The
-        // per-track observe loop inside [refreshLikeButton] keeps the
-        // icon in sync if the user toggles like from elsewhere
-        // (Now Playing, Library, etc.) while audio is playing.
+        // Per-track wiring on every transition:
+        //   1. Heart-button notification icon (filled vs. outlined) so the
+        //      lockscreen reflects the new track's Stash-Liked state. The
+        //      per-track observe loop inside [refreshLikeButton] keeps the
+        //      icon in sync if the user toggles like from elsewhere
+        //      (Now Playing, Library, etc.) while audio is playing.
+        //   2. Loudness normalisation: pull the new track's measured LUFS /
+        //      true-peak from the DB and push the computed per-track gain
+        //      to [LoudnessController]. The DSP layer reads the controller
+        //      state and ramps to the new target via LoudnessGainProcessor.
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
                 refreshLikeButton()
+                onTrackTransitionForLoudness(mediaItem)
             }
         })
         refreshLikeButton()
+    }
+
+    /**
+     * Test-visible per-transition hook for loudness gain. Resolves the
+     * media item to a track row (matching the heart-button's
+     * `mediaId.toLongOrNull()` convention) and pushes the computed gain
+     * to [LoudnessController]. No-ops when the id can't be parsed, the
+     * row is missing, or the track has no measured loudness yet — in
+     * those cases [computeGain] returns 0 dB which is the safe bypass.
+     *
+     * Visibility is `internal` so unit tests can invoke the hook directly
+     * without booting a full [MediaSessionService] / [ExoPlayer].
+     */
+    internal fun onTrackTransitionForLoudness(mediaItem: MediaItem?) {
+        val trackId = mediaItem?.mediaId?.toLongOrNull() ?: return
+        serviceScope.launch {
+            val track = trackDao.getById(trackId) ?: return@launch
+            val gainDb = computeGain(track.loudnessLufs, track.truePeakDbfs)
+            loudnessController.setCurrentTrackGain(gainDb)
+        }
     }
 
     /**

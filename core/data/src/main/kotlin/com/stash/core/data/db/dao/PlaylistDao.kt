@@ -417,12 +417,32 @@ interface PlaylistDao {
      * (Stash Mix recipes, Downloads Mix, daily mixes/liked songs).
      * LIKED_SONGS is intentionally not pickable here — Like is a
      * separate first-class action.
+     *
+     * v0.9.25 fix — visibility mirrors [getAllVisible]'s Home/Library
+     * rule: a playlist is pickable if either (a) its sync toggle is
+     * on, OR (b) it already has at least one downloaded track. This
+     * matches the established invariant that "playlists you've invested
+     * in stay visible regardless of sync_enabled." `source = 'BOTH'`
+     * (Stash-native customs) is included as a defensive third arm so
+     * brand-new empty custom playlists are always pickable as a save
+     * destination, even before they have tracks.
      */
     @Query(
         """
         SELECT * FROM playlists
         WHERE is_active = 1
           AND type IN ('CUSTOM')
+          AND (
+              source = 'BOTH'
+              OR sync_enabled = 1
+              OR EXISTS (
+                  SELECT 1 FROM playlist_tracks pt
+                  JOIN tracks t ON pt.track_id = t.id
+                  WHERE pt.playlist_id = playlists.id
+                    AND pt.removed_at IS NULL
+                    AND t.is_downloaded = 1
+              )
+          )
         ORDER BY
           CASE WHEN source = 'BOTH' THEN 0 ELSE 1 END,
           name ASC

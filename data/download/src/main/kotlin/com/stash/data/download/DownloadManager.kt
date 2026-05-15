@@ -382,6 +382,24 @@ class DownloadManager @Inject constructor(
                     }
                 }
 
+                // Persist loudness (LUFS + true peak) measured by TrackFinalizer.
+                // Null = ebur128 couldn't parse a Summary block (very short file,
+                // ffmpeg failure); the columns stay NULL so LoudnessBackfillWorker
+                // can retry later. Non-fatal — file is on disk and playable, only
+                // the per-track makeup gain is unavailable until backfill.
+                finalized.loudness?.let { l ->
+                    runCatching {
+                        trackDao.updateLoudness(
+                            track.id,
+                            l.lufs,
+                            l.truePeakDbfs,
+                            System.currentTimeMillis(),
+                        )
+                    }.onFailure { e ->
+                        Log.w(TAG, "lossless: updateLoudness failed for ${track.id}: ${e.message}")
+                    }
+                }
+
                 emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
                 return TrackDownloadResult.Success(finalized.committed.filePath)
             }

@@ -25,6 +25,7 @@ import com.stash.core.data.sync.workers.ArtBackfillWorker
 import com.stash.core.data.sync.workers.AutoSaveScrobbler
 import com.stash.core.data.sync.workers.DiscoveryDownloadWorker
 import com.stash.core.data.sync.workers.QualityInfoBackfillWorker
+import com.stash.core.data.sync.workers.LoudnessBackfillWorker
 import com.stash.core.data.sync.workers.StashDiscoveryWorker
 import com.stash.core.data.sync.workers.StashMixRefreshWorker
 import com.stash.core.data.sync.workers.TagEnrichmentWorker
@@ -193,6 +194,7 @@ class StashApplication : Application(), Configuration.Provider {
             )
         }
         StashMixRefreshWorker.schedulePeriodic(this)
+        LoudnessBackfillWorker.schedulePeriodic(this)
         // Tag enrichment + discovery worker constraints come from the
         // user's DownloadNetworkMode preference. Re-scheduling when the
         // setting changes is the Settings ViewModel's job — this path is

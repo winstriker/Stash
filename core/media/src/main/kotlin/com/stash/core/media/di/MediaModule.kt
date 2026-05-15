@@ -9,6 +9,7 @@ import com.stash.core.media.PlayerRepositoryImpl
 import com.stash.core.media.equalizer.EqStore
 import com.stash.core.media.equalizer.LegacyEqualizerStore
 import com.stash.core.media.equalizer.LegacyEqualizerStoreImpl
+import com.stash.core.media.equalizer.LoudnessStore
 import dagger.Binds
 import dagger.Module
 import dagger.Provides
@@ -21,6 +22,14 @@ import javax.inject.Singleton
 // legacy "equalizer_prefs" store so the two DataStore instances never collide).
 private val Context.eqDataStore by preferencesDataStore(
     name = "eq_state_v1",
+    corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
+)
+
+// File-scope extension for the LoudnessStore DataStore. Per-concern naming so
+// the loudness JSON blob never collides with EQ state, and so a corrupt write
+// during process death only resets loudness — not EQ.
+private val Context.loudnessDataStore by preferencesDataStore(
+    name = "loudness_state_v1",
     corruptionHandler = ReplaceFileCorruptionHandler { emptyPreferences() },
 )
 
@@ -50,5 +59,11 @@ abstract class MediaModule {
         fun provideEqStore(
             @ApplicationContext context: Context,
         ): EqStore = EqStore(context.eqDataStore)
+
+        @Provides
+        @Singleton
+        fun provideLoudnessStore(
+            @ApplicationContext context: Context,
+        ): LoudnessStore = LoudnessStore(context.loudnessDataStore)
     }
 }

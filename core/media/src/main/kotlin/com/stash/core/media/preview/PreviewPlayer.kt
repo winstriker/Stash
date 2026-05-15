@@ -13,6 +13,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.MediaSource
 import com.stash.core.common.perf.PerfLog
 import com.stash.core.media.equalizer.EqController
+import com.stash.core.media.equalizer.LoudnessController
 import com.stash.core.media.equalizer.StashRenderersFactory
 import dagger.hilt.android.qualifiers.ApplicationContext
 import javax.inject.Inject
@@ -81,6 +82,7 @@ data class PreviewErrorEvent(val videoId: String, val error: PlaybackException)
 class PreviewPlayer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val eqController: EqController,
+    private val loudnessController: LoudnessController,
 ) {
 
     // ------------------------------------------------------------------
@@ -200,7 +202,7 @@ class PreviewPlayer @Inject constructor(
     @OptIn(UnstableApi::class)
     private fun requirePlayer(): ExoPlayer {
         return exoPlayer ?: ExoPlayer.Builder(context)
-            .setRenderersFactory(StashRenderersFactory(context, eqController))
+            .setRenderersFactory(StashRenderersFactory(context, eqController, loudnessController))
             .setLoadControl(PreviewLoadControlFactory.create())
             .setAudioAttributes(
                 AudioAttributes.Builder()
