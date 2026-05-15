@@ -3,13 +3,16 @@ package com.stash.feature.settings.equalizer
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.stash.core.data.audio.LoudnessProgressStore
 import com.stash.core.media.equalizer.EqController
+import com.stash.core.media.equalizer.LoudnessController
 import com.stash.core.media.equalizer.NamedPreset
 import com.stash.core.media.equalizer.PresetCatalog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -43,9 +46,24 @@ data class EqUiState(
   }
 }
 
+/**
+ * UI projection of [LoudnessController.state] + [LoudnessProgressStore.flow].
+ *
+ * Exposed to the EqualizerScreen's loudness card so it can render an
+ * enable/disable toggle and a progress bar while the backfill worker
+ * measures LUFS for the un-measured backlog.
+ */
+data class LoudnessUiState(
+  val enabled: Boolean = true,
+  val backfillRemaining: Int = 0,
+  val backfillTotal: Int = 0,
+)
+
 @HiltViewModel
 class EqualizerViewModel @Inject constructor(
   private val controller: EqController,
+  private val loudnessController: LoudnessController,
+  private val loudnessProgressStore: LoudnessProgressStore,
 ) : ViewModel() {
   val uiState: StateFlow<EqUiState> = controller.state.map { s ->
     EqUiState(
@@ -58,6 +76,17 @@ class EqualizerViewModel @Inject constructor(
     )
   }.stateIn(viewModelScope, SharingStarted.Eagerly, EqUiState())
 
+  val loudnessUiState: StateFlow<LoudnessUiState> = combine(
+    loudnessController.state,
+    loudnessProgressStore.flow,
+  ) { settings, progress ->
+    LoudnessUiState(
+      enabled = settings.enabled,
+      backfillRemaining = progress.remaining,
+      backfillTotal = progress.total,
+    )
+  }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoudnessUiState())
+
   fun onToggle(enabled: Boolean) = controller.setEnabled(enabled)
   fun onBandChanged(band: Int, dB: Float) = controller.setBandGain(band, dB)
   fun onPreampChanged(dB: Float) = controller.setPreampDb(dB)
@@ -65,4 +94,6 @@ class EqualizerViewModel @Inject constructor(
   fun onPresetSelected(id: String) = controller.setPreset(id)
   fun onSaveCurrentPreset(name: String) = controller.saveCurrentAsPreset(name)
   fun onDeletePreset(id: String) = controller.deleteCustomPreset(id)
+
+  fun onLoudnessToggle(enabled: Boolean) = loudnessController.setEnabled(enabled)
 }
