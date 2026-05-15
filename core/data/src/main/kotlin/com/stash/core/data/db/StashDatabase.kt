@@ -70,7 +70,7 @@ import com.stash.core.data.db.entity.TrackTagEntity
         TrackBlocklistEntity::class,
         TrackSkipEventEntity::class,
     ],
-    version = 23,
+    version = 24,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -657,6 +657,24 @@ abstract class StashDatabase : RoomDatabase() {
                     "ALTER TABLE playlist_tracks " +
                         "ADD COLUMN locally_added INTEGER NOT NULL DEFAULT 0",
                 )
+            }
+        }
+
+        /**
+         * v23 → v24: per-track loudness metadata for BS.1770 normalization.
+         *
+         * Three nullable columns: `loudness_lufs` (integrated LUFS, null = not
+         * measured, NaN = measurement attempted-and-failed sentinel),
+         * `true_peak_dbfs` (sample-peak in dBFS, negative),
+         * `loudness_measured_at` (epoch-ms timestamp of the measurement
+         * attempt; usable for stale-measurement detection if the algorithm
+         * ever changes and for the weekly NaN-resurrection query).
+         */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN loudness_lufs REAL")
+                db.execSQL("ALTER TABLE tracks ADD COLUMN true_peak_dbfs REAL")
+                db.execSQL("ALTER TABLE tracks ADD COLUMN loudness_measured_at INTEGER")
             }
         }
     }
