@@ -45,7 +45,12 @@ class EqualizerViewModelTest {
     every { it.flow } returns progressFlow
   }
 
-  private fun newVm() = EqualizerViewModel(ctrl, loudnessCtrl, progressStore)
+  private val firstRunFlow = MutableStateFlow(false)
+  private val firstRunStore = mockk<LoudnessFirstRunStore>(relaxed = true).also {
+    every { it.noticeShownFlow } returns firstRunFlow
+  }
+
+  private fun newVm() = EqualizerViewModel(ctrl, loudnessCtrl, progressStore, firstRunStore)
 
   @Test fun `state flow forwards to UI state`() = runTest {
     val vm = newVm()

@@ -28,13 +28,19 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
@@ -86,12 +93,46 @@ fun EqualizerScreen(
         )
     }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
-    ) {
+    // ── First-run Snackbar plumbing ────────────────────────────────────────
+    // Loudness defaults to ON; the user has no visible cue this happened
+    // unless we tell them. We show the notice exactly once per install — the
+    // backing store flips a boolean the first time the user dismisses the
+    // Snackbar OR toggles the loudness switch (interaction implies they
+    // already noticed the feature). After that, [showFirstRunNotice] stays
+    // false forever and the Snackbar never reappears.
+    val snackbarHostState = remember { SnackbarHostState() }
+    val showFirstRunNotice by viewModel.showFirstRunNotice.collectAsStateWithLifecycle()
+    LaunchedEffect(showFirstRunNotice) {
+        if (showFirstRunNotice) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Loudness normalization is on. Tracks will sound more " +
+                    "consistent as your library is measured in the background.",
+                actionLabel = "Dismiss",
+                duration = SnackbarDuration.Indefinite,
+            )
+            if (
+                result == SnackbarResult.ActionPerformed ||
+                result == SnackbarResult.Dismissed
+            ) {
+                viewModel.onFirstRunNoticeDismissed()
+            }
+        }
+    }
+
+    // Scaffold with a transparent container — the parent NavHost already
+    // paints the app's themed gradient background, so we don't want this
+    // screen to clobber it with the default surface colour.
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = Color.Transparent,
+    ) { innerPadding ->
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+        ) {
         Spacer(Modifier.height(16.dp))
 
         EqHeader(
@@ -184,7 +225,14 @@ fun EqualizerScreen(
                     Spacer(Modifier.weight(1f))
                     Switch(
                         checked = loudnessState.enabled,
-                        onCheckedChange = viewModel::onLoudnessToggle,
+                        // Toggling the loudness switch counts as the user
+                        // having seen the feature — clear the first-run
+                        // notice flag so the Snackbar doesn't reappear on
+                        // the next visit.
+                        onCheckedChange = { enabled ->
+                            viewModel.onLoudnessToggle(enabled)
+                            viewModel.onFirstRunNoticeDismissed()
+                        },
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = MaterialTheme.colorScheme.primary,
                             checkedTrackColor = MaterialTheme.colorScheme.primaryContainer,
@@ -247,8 +295,9 @@ fun EqualizerScreen(
             }
         }
 
-        // Bottom padding for nav bar clearance
-        Spacer(Modifier.height(80.dp))
+            // Bottom padding for nav bar clearance
+            Spacer(Modifier.height(80.dp))
+        }
     }
 }
 

@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
 
 data class EqUiState(
   val enabled: Boolean = false,
@@ -64,6 +65,7 @@ class EqualizerViewModel @Inject constructor(
   private val controller: EqController,
   private val loudnessController: LoudnessController,
   private val loudnessProgressStore: LoudnessProgressStore,
+  private val loudnessFirstRunStore: LoudnessFirstRunStore,
 ) : ViewModel() {
   val uiState: StateFlow<EqUiState> = controller.state.map { s ->
     EqUiState(
@@ -87,6 +89,16 @@ class EqualizerViewModel @Inject constructor(
     )
   }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), LoudnessUiState())
 
+  /**
+   * Emits `true` while the one-time "loudness normalization is on" Snackbar
+   * has not yet been shown/dismissed by the user. Backed by
+   * [LoudnessFirstRunStore] so the notice survives process restart but
+   * disappears forever after the first acknowledgement.
+   */
+  val showFirstRunNotice: StateFlow<Boolean> = loudnessFirstRunStore.noticeShownFlow
+    .map { !it }
+    .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+
   fun onToggle(enabled: Boolean) = controller.setEnabled(enabled)
   fun onBandChanged(band: Int, dB: Float) = controller.setBandGain(band, dB)
   fun onPreampChanged(dB: Float) = controller.setPreampDb(dB)
@@ -96,4 +108,14 @@ class EqualizerViewModel @Inject constructor(
   fun onDeletePreset(id: String) = controller.deleteCustomPreset(id)
 
   fun onLoudnessToggle(enabled: Boolean) = loudnessController.setEnabled(enabled)
+
+  /**
+   * Marks the first-run notice as shown so it never re-appears. Called both
+   * from the Snackbar dismiss/action callbacks and as a side-effect of the
+   * user interacting with the loudness toggle (interaction implies
+   * acknowledgement, no separate dismiss needed).
+   */
+  fun onFirstRunNoticeDismissed() {
+    viewModelScope.launch { loudnessFirstRunStore.markShown() }
+  }
 }
