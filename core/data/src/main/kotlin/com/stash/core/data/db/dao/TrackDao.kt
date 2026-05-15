@@ -528,6 +528,78 @@ interface TrackDao {
     )
     suspend fun updateQualityInfo(trackId: Long, sampleRateHz: Int?, bitsPerSample: Int?)
 
+    // ── Loudness normalization (v0.9.25) ────────────────────────────────
+
+    /**
+     * Returns up to [limit] downloaded tracks whose loudness has not yet
+     * been measured. The `loudness_measured_at IS NULL` filter skips both
+     * successfully-measured rows AND failed-sentinel rows (NaN-marked) —
+     * any measurement attempt, success or failure, writes the timestamp.
+     *
+     * `file_path IS NOT NULL` excludes stub rows (queued for download but
+     * not yet on disk); the backfill worker can only measure files we have.
+     *
+     * A separate weekly resurrection query (added later in the plan) picks
+     * up the failed-sentinel rows after a cooldown for a single retry pass.
+     */
+    @Query(
+        """
+        SELECT * FROM tracks
+        WHERE loudness_measured_at IS NULL
+          AND file_path IS NOT NULL
+        LIMIT :limit
+        """
+    )
+    suspend fun tracksNeedingLoudness(limit: Int): List<TrackEntity>
+
+    /**
+     * Writes a successful loudness measurement: integrated loudness in
+     * LUFS, true-peak in dBFS, and the wall-clock timestamp of the
+     * measurement. Called by the backfill worker / TrackFinalizer after
+     * FFmpeg ebur128 returns valid numbers.
+     */
+    @Query(
+        """
+        UPDATE tracks
+        SET loudness_lufs = :lufs,
+            true_peak_dbfs = :peak,
+            loudness_measured_at = :now
+        WHERE id = :id
+        """
+    )
+    suspend fun updateLoudness(id: Long, lufs: Float, peak: Float, now: Long)
+
+    /**
+     * Marks a track's measurement as attempted-and-failed. Writes
+     * `Float.NaN` (intent-level sentinel) to `loudness_lufs` and the
+     * wall-clock timestamp to `loudness_measured_at`; `true_peak_dbfs`
+     * is left untouched (no UPDATE clause for it).
+     *
+     * **Round-trip note:** Android/Room's `bindDouble` + SQLite normalise
+     * NaN to NULL on storage — readback of `loudness_lufs` after this
+     * call comes back as `null`, not NaN. The actual failure-vs-pristine
+     * discriminator is `loudness_measured_at`: pristine rows have it null,
+     * any attempt (success OR failure) sets it. [tracksNeedingLoudness]
+     * is built around this physical discriminator, so failed rows are
+     * correctly excluded. The downstream gain computer reads null LUFS
+     * as "no gain to apply" — semantically identical to the
+     * never-measured branch from the user's perspective.
+     *
+     * A separate weekly resurrection query (added later in the plan)
+     * picks up the failed-sentinel rows after a cooldown for a single
+     * retry attempt in case the failure was transient (decode error,
+     * file moved during scan, etc).
+     */
+    @Query(
+        """
+        UPDATE tracks
+        SET loudness_lufs = :nanSentinel,
+            loudness_measured_at = :now
+        WHERE id = :id
+        """
+    )
+    suspend fun markLoudnessFailed(id: Long, now: Long, nanSentinel: Float = Float.NaN)
+
     // ── Play tracking ───────────────────────────────────────────────────
 
     /** Atomically increment [play_count] for the given track. */
