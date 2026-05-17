@@ -212,6 +212,8 @@ fun SettingsScreen(
         onNavigateToEqualizer = onNavigateToEqualizer,
         onNavigateToLibraryHealth = onNavigateToLibraryHealth,
         onNavigateToSquidWtfCaptcha = onNavigateToSquidWtfCaptcha,
+        onShareLatestCrashReport = viewModel::latestCrashShareTarget,
+        onDiagnosticsRefresh = viewModel::refreshDiagnostics,
         modifier = modifier,
     )
 }
@@ -259,6 +261,18 @@ private fun SettingsContent(
     onNavigateToEqualizer: () -> Unit,
     onNavigateToLibraryHealth: () -> Unit,
     onNavigateToSquidWtfCaptcha: () -> Unit,
+    /**
+     * Returns the latest crash file + its FileProvider URI, or null if
+     * none exists. Called only when the user taps the share button —
+     * never on composition.
+     */
+    onShareLatestCrashReport: () -> SettingsViewModel.CrashShareTarget?,
+    /**
+     * Re-list `cacheDir/crashes/` to refresh [SettingsUiState.hasCrashReport].
+     * Triggered on entry so the button reflects current disk state even
+     * when the user navigates away and comes back.
+     */
+    onDiagnosticsRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val extendedColors = StashTheme.extendedColors
@@ -1113,6 +1127,81 @@ private fun SettingsContent(
         // Phase 8: Library maintenance (Blocked Songs + Fix wrong-version
         // downloads) relocated to the Sync tab. Settings no longer carries
         // a Library section.
+
+        // -- Diagnostics section ----------------------------------------------
+        // Crash-to-file: writes uncaught exceptions to cacheDir/crashes/ so
+        // the user can attach the latest one to an email / Discord / GitHub
+        // issue. Zero network, zero auto-upload. Disabled when no files
+        // exist; LaunchedEffect refreshes liveness on every entry so a
+        // share that resolves the issue immediately flips the button off
+        // on the next screen visit.
+        val diagnosticsContext = LocalContext.current
+        LaunchedEffect(Unit) { onDiagnosticsRefresh() }
+
+        SectionHeader(title = "Diagnostics")
+
+        GlassCard {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    text = "Share latest crash report",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = if (uiState.hasCrashReport) {
+                        "Attach the most recent crash log to email or chat. Stays on device until you share."
+                    } else {
+                        "No recent crashes."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                OutlinedButton(
+                    enabled = uiState.hasCrashReport,
+                    onClick = {
+                        val target = onShareLatestCrashReport()
+                        if (target == null) {
+                            Toast.makeText(
+                                diagnosticsContext,
+                                "No crash report to share.",
+                                Toast.LENGTH_SHORT,
+                            ).show()
+                            return@OutlinedButton
+                        }
+                        val send = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                            type = "text/plain"
+                            putExtra(android.content.Intent.EXTRA_STREAM, target.contentUri)
+                            putExtra(
+                                android.content.Intent.EXTRA_SUBJECT,
+                                "Stash crash report",
+                            )
+                            // FLAG_GRANT_READ is required so the recipient
+                            // app can actually read the file:// URI behind
+                            // the content:// shim.
+                            addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        val chooser = android.content.Intent.createChooser(send, "Share crash report")
+                            .apply { addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK) }
+                        runCatching { diagnosticsContext.startActivity(chooser) }
+                            .onFailure {
+                                Toast.makeText(
+                                    diagnosticsContext,
+                                    "No app available to share the report.",
+                                    Toast.LENGTH_SHORT,
+                                ).show()
+                            }
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                    Text("Share latest crash report")
+                }
+            }
+        }
 
         // -- About section ----------------------------------------------------
         SectionHeader(title = "About")

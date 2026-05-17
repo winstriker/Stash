@@ -9,6 +9,7 @@ import com.stash.core.auth.youtube.YouTubeCookieHelper
 import android.content.Context
 import android.net.Uri
 import com.stash.core.data.db.dao.TrackDao
+import com.stash.core.data.diagnostics.CrashFileStore
 import com.stash.core.data.prefs.DownloadNetworkPreference
 import com.stash.core.data.prefs.LikePreferences
 import com.stash.core.data.prefs.QualityPreference
@@ -92,7 +93,15 @@ class SettingsViewModel @Inject constructor(
     private val likePreferences: LikePreferences,
     private val trackDao: TrackDao,
     private val settingsDeepLinkController: com.stash.core.data.navigation.SettingsDeepLinkController,
+    private val crashFileStore: CrashFileStore,
 ) : ViewModel() {
+
+    init {
+        // Refresh on construction so the Diagnostics card shows the
+        // correct enabled/disabled state on first frame. Cheap (a
+        // single directory listing) — no need to rerun on every flow tick.
+        refreshDiagnostics()
+    }
 
     /**
      * v0.9.13: One-shot deep-link focus from Home banners. Read once on
@@ -233,6 +242,7 @@ class SettingsViewModel @Inject constructor(
             heartDefaultYtMusic = heartDefaultYtMusic,
             autoSavedCountLast7Days = autoSavedCount7d,
             youtubeFallbackEnabled = youtubeFallbackEnabled,
+            hasCrashReport = local.hasCrashReport,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -825,5 +835,48 @@ class SettingsViewModel @Inject constructor(
          * (snackbar) and then cleared via [onClearScrobbleDrainResult].
          */
         val lastScrobbleDrainResult: LastFmScrobbler.DrainResult? = null,
+        /**
+         * Last-known liveness of `cacheDir/crashes/`. Refreshed by
+         * [refreshDiagnostics] on Settings entry and again after the user
+         * taps share. Used by the Settings UI to enable/disable the
+         * "Share latest crash report" button + render its subtitle.
+         */
+        val hasCrashReport: Boolean = false,
+    )
+
+    // -- Diagnostics ----------------------------------------------------------
+
+    /**
+     * Re-list crash files and update [hasCrashReport]. Called on init and
+     * after share to keep the button's enabled state in sync with disk.
+     */
+    fun refreshDiagnostics() {
+        val present = crashFileStore.latestCrashFile() != null
+        _localState.update { it.copy(hasCrashReport = present) }
+    }
+
+    /**
+     * Returns the newest crash file paired with a content:// URI suitable
+     * for an ACTION_SEND share Intent — or null if no file exists. The
+     * screen wraps the result in the actual Intent and calls
+     * `Context.startActivity`. Refreshes [hasCrashReport] as a side effect
+     * so a missing file flips the button's state immediately.
+     */
+    fun latestCrashShareTarget(): CrashShareTarget? {
+        val file = crashFileStore.latestCrashFile()
+        if (file == null) {
+            _localState.update { it.copy(hasCrashReport = false) }
+            return null
+        }
+        return CrashShareTarget(
+            file = file,
+            contentUri = crashFileStore.shareUriFor(file),
+        )
+    }
+
+    /** Bundle returned by [latestCrashShareTarget]; the screen builds the Intent. */
+    data class CrashShareTarget(
+        val file: java.io.File,
+        val contentUri: android.net.Uri,
     )
 }

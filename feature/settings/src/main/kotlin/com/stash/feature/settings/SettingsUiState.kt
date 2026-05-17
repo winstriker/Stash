@@ -135,6 +135,14 @@ data class SettingsUiState(
      * [audioQuality]. Only meaningful while [losslessEnabled] is true.
      */
     val youtubeFallbackEnabled: Boolean = false,
+    /**
+     * True when at least one crash report exists in `cacheDir/crashes/`.
+     * Drives the enabled state of the "Share latest crash report" button
+     * in the Diagnostics section. Refreshed on every Settings entry by the
+     * ViewModel (see `refreshDiagnostics`); also re-checked after the user
+     * taps share, in case the file was deleted between init and tap.
+     */
+    val hasCrashReport: Boolean = false,
 )
 
 /**
