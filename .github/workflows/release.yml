@@ -121,6 +121,8 @@ jobs:
         with:
           name: Stash ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
+          # Overwrite existing assets if the workflow is re-run for the same tag
+          overwrite: true
           # Auto-append a "What's Changed" commit list under our custom body
           # so the raw commit history is still there if someone wants it.
           generate_release_notes: true
