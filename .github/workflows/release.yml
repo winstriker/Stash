@@ -14,6 +14,9 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'split-apks'
+  workflow_dispatch:
 
 permissions:
   contents: write  # required to create the GitHub Release and upload assets
