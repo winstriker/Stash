@@ -68,6 +68,20 @@ val lastFmApiSecret: String =
 android {
     namespace = "com.stash.app"
     compileSdk = 35
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+            isUniversalApk = true
+        }
+    }
+
+    androidResources {
+        localeFilters += "en"
+    }
+
     defaultConfig {
         applicationId = "com.stash.app"
         minSdk = 26
@@ -152,7 +166,18 @@ android {
             // libc++_shared.so are in the same directory and can be linked at runtime.
             useLegacyPackaging = true
         }
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/versions/9/previous-compilation-data.bin"
+            excludes += "META-INF/LICENSE*"
+            excludes += "META-INF/NOTICE*"
+            excludes += "META-INF/ASL2.0"
+        }
     }
+}
+
+hilt {
+    enableAggregatingTask = true
 }
 
 kotlin {

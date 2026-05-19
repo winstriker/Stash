@@ -59,37 +59,37 @@ jobs:
           STASH_KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           STASH_KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           STASH_KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          # Optional Last.fm API credentials. Missing secrets are OK —
-          # the app builds fine, the Last.fm UI just shows "Not configured."
-          # Set these in repo Settings → Secrets → Actions to enable the
-          # scrobbler in shipped APKs:
-          #   LASTFM_API_KEY     — from https://www.last.fm/api/account/create
-          #   LASTFM_API_SECRET  — shared secret from the same page
           LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
           LASTFM_API_SECRET: ${{ secrets.LASTFM_API_SECRET }}
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: ./gradlew :app:assembleRelease
 
-      - name: Locate release APK
-        id: find_apk
-        run: |
-          APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n1)
-          if [ -z "$APK" ]; then
-            echo "::error::No release APK produced by assembleRelease"
-            exit 1
-          fi
-          echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
-          echo "apk_name=$(basename $APK)" >> "$GITHUB_OUTPUT"
-          echo "Built: $APK ($(du -h $APK | cut -f1))"
-
-      - name: Rename APK for release
-        id: rename_apk
+      - name: Prepare APKs for release
+        id: prepare_apks
         run: |
           TAG="${GITHUB_REF_NAME}"
-          NEW_NAME="Stash-${TAG}.apk"
-          cp "${{ steps.find_apk.outputs.apk_path }}" "$RUNNER_TEMP/$NEW_NAME"
-          echo "release_apk=$RUNNER_TEMP/$NEW_NAME" >> "$GITHUB_OUTPUT"
-          echo "release_name=$NEW_NAME" >> "$GITHUB_OUTPUT"
-          ls -la "$RUNNER_TEMP/$NEW_NAME"
+          DEST="$RUNNER_TEMP/release_artifacts"
+          mkdir -p "$DEST"
+          
+          # Find all APKs in the release output directory
+          # When ABI splits are enabled, AGP produces app-<abi>-release.apk and app-universal-release.apk
+          FILES=$(find app/build/outputs/apk/release -name "*.apk")
+          
+          if [ -z "$FILES" ]; then
+            echo "::error::No release APKs found in app/build/outputs/apk/release"
+            exit 1
+          fi
+          
+          for apk in $FILES; do
+            FILENAME=$(basename "$apk")
+            # app-arm64-v8a-release.apk -> Stash-v1.0.0-arm64-v8a.apk
+            # app-universal-release.apk -> Stash-v1.0.0-universal.apk
+            NEW_NAME=$(echo "$FILENAME" | sed "s/app-/Stash-${TAG}-/" | sed "s/-release//" | sed "s/Stash-${TAG}-\.apk/Stash-${TAG}.apk/")
+            
+            cp "$apk" "$DEST/$NEW_NAME"
+            echo "Prepared: $NEW_NAME ($(du -h "$apk" | cut -f1))"
+          done
+          
+          ls -la "$DEST"
 
       - name: Extract tag annotation as release body
         id: tag_body
@@ -123,7 +123,7 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref_name, '-beta') || contains(github.ref_name, '-rc') || contains(github.ref_name, '-alpha') }}
-          files: ${{ steps.rename_apk.outputs.release_apk }}
+          files: ${{ runner.temp }}/release_artifacts/*.apk
           body: |
             ${{ steps.tag_body.outputs.body }}
 
