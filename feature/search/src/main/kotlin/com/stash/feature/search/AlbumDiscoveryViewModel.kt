@@ -198,6 +198,44 @@ class AlbumDiscoveryViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Play this album in streaming mode (or downloaded-only mode), starting
+     * at [startIndex] within the album's track list. The screen exposes
+     * this two ways:
+     *  - "Play album" button in the [AlbumHero] action row (startIndex = 0)
+     *  - tap on an individual track row (startIndex = that row's index)
+     *
+     * Album tracks are synthesised into [com.stash.core.model.Track]
+     * domain objects with a `videoId.hashCode()` synthetic id — matches
+     * the same pattern [PlayerRepositoryImpl.playFromStream] uses for
+     * search-tab single-track playback. `setQueue` then resolves URLs
+     * through Kennyy/squid via the standard streaming routing.
+     */
+    fun playAlbum(startIndex: Int = 0) {
+        viewModelScope.launch {
+            val tracks = _uiState.value.tracks
+            if (tracks.isEmpty()) return@launch
+            val safeStart = startIndex.coerceIn(0, tracks.size - 1)
+            val albumTitle = _uiState.value.hero.title
+            val albumArtist = _uiState.value.hero.artist
+            val albumArt = _uiState.value.hero.thumbnailUrl
+            val domainTracks = tracks.map { t ->
+                com.stash.core.model.Track(
+                    id = t.videoId.hashCode().toLong(),
+                    title = t.title,
+                    artist = t.artist.ifBlank { albumArtist },
+                    album = albumTitle,
+                    durationMs = (t.durationSeconds * 1000L).toLong(),
+                    albumArtUrl = t.thumbnailUrl ?: albumArt,
+                    youtubeId = t.videoId,
+                    source = com.stash.core.model.MusicSource.YOUTUBE,
+                    isStreamable = true,
+                )
+            }
+            playerRepository.setQueue(domainTracks, safeStart)
+        }
+    }
+
     override fun onCleared() {
         super.onCleared()
         delegate.onOwnerCleared()

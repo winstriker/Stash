@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -103,6 +105,7 @@ fun AlbumDiscoveryScreen(
                     onBack = onBack,
                     onShuffle = vm::shuffleDownloaded,
                     onDownloadAll = vm::onDownloadAllClicked,
+                    onPlayAlbum = { vm.playAlbum(startIndex = 0) },
                 )
             }
 
@@ -141,10 +144,10 @@ fun AlbumDiscoveryScreen(
                             }
                         }
                     } else {
-                        items(
+                        itemsIndexed(
                             items = state.tracks,
-                            key = { "album_track_" + it.videoId },
-                        ) { track ->
+                            key = { _, t -> "album_track_" + t.videoId },
+                        ) { index, track ->
                             val currentPreviewState = previewState
                             val isPreviewPlaying = currentPreviewState is PreviewState.Playing &&
                                 currentPreviewState.videoId == track.videoId
@@ -162,6 +165,11 @@ fun AlbumDiscoveryScreen(
                             LaunchedEffect(track.videoId) {
                                 vm.losslessPrefetcher.warmUp(trackItem)
                             }
+                            // Row body is clickable to play the album from this
+                            // track's position. The inline preview/download
+                            // buttons inside PreviewDownloadRow have their own
+                            // click handlers that consume the event, so the
+                            // outer clickable only fires on the metadata area.
                             PreviewDownloadRow(
                                 item = track.toSearchResultItem(),
                                 isDownloading = track.videoId in downloadingIds,
@@ -183,7 +191,9 @@ fun AlbumDiscoveryScreen(
                                         ),
                                     )
                                 },
-                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                                modifier = Modifier
+                                    .padding(horizontal = 16.dp, vertical = 4.dp)
+                                    .clickable { vm.playAlbum(startIndex = index) },
                             )
                         }
                         if (state.moreByArtist.isNotEmpty()) {

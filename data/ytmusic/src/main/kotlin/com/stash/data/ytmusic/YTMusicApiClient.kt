@@ -342,6 +342,15 @@ class YTMusicApiClient @Inject constructor(
         var singles = emptyList<AlbumSummary>()
         var related = emptyList<ArtistSummary>()
 
+        // YT Music caps the artist-page carousels at ~10 items. When the
+        // artist has more, the carousel header carries a "More" button
+        // whose browseId points to a dedicated grid page. We capture
+        // those ids during the carousel walk and follow them in a
+        // second pass (post-loop) to replace truncated carousels with
+        // the full discography.
+        var albumsMoreBrowseId: String? = null
+        var singlesMoreBrowseId: String? = null
+
         // Parsers live in ArtistResponseParser.kt as top-level internal funcs.
         for (section in sections) {
             val obj = section.asObject() ?: continue
@@ -362,8 +371,10 @@ class YTMusicApiClient @Inject constructor(
                 )?.firstArray()?.firstOrNull()?.asObject()
                     ?.get("text")?.asString().orEmpty()
                 when {
-                    title.equals("Albums", ignoreCase = true) ->
+                    title.equals("Albums", ignoreCase = true) -> {
                         albums = parseAlbumsCarousel(carousel)
+                        albumsMoreBrowseId = parseCarouselMoreBrowseId(carousel)
+                    }
                     // `contains("Singles")` subsumes both the stand-alone
                     // "Singles" shelf and the combined "Singles and EPs"
                     // shelf that InnerTube A/B-ships; the `contains("EPs")`
@@ -371,8 +382,12 @@ class YTMusicApiClient @Inject constructor(
                     // arrive on the same page, defensively merge them rather
                     // than clobber the first shelf we saw.
                     title.contains("Singles", ignoreCase = true) ||
-                        title.contains("EPs", ignoreCase = true) ->
+                        title.contains("EPs", ignoreCase = true) -> {
                         singles = singles + parseAlbumsCarousel(carousel)
+                        if (singlesMoreBrowseId == null) {
+                            singlesMoreBrowseId = parseCarouselMoreBrowseId(carousel)
+                        }
+                    }
                     title.contains("Fans also like", ignoreCase = true) ->
                         related = parseArtistsCarousel(carousel)
                     // Surface locale regressions (e.g. a translated "Albumes"
@@ -381,6 +396,36 @@ class YTMusicApiClient @Inject constructor(
                     else -> Log.d(TAG, "getArtist: unknown carousel '$title' — skipped")
                 }
             }
+        }
+
+        // Follow the carousel "View all" links to replace the truncated
+        // ~10-card inline lists with the full discography grid. Best-
+        // effort — if the second browse fails or returns an unparseable
+        // shape, we keep the carousel result and log. Singles + albums
+        // each take their own browse call (~50KB each), so the cost is
+        // ~2 extra HTTP requests per artist page load. Worth it: this is
+        // the only way to surface artists with > 10 albums (Drake, etc).
+        albumsMoreBrowseId?.let { moreId ->
+            runCatching {
+                innerTubeClient.browse(moreId)?.let { gridResponse ->
+                    val full = parseAlbumsGridResponse(gridResponse)
+                    if (full.isNotEmpty()) {
+                        Log.d(TAG, "getArtist: albums grid expanded ${albums.size} -> ${full.size}")
+                        albums = full
+                    }
+                }
+            }.onFailure { Log.w(TAG, "getArtist: albums-more fetch failed: ${it.message}") }
+        }
+        singlesMoreBrowseId?.let { moreId ->
+            runCatching {
+                innerTubeClient.browse(moreId)?.let { gridResponse ->
+                    val full = parseAlbumsGridResponse(gridResponse)
+                    if (full.isNotEmpty()) {
+                        Log.d(TAG, "getArtist: singles grid expanded ${singles.size} -> ${full.size}")
+                        singles = full
+                    }
+                }
+            }.onFailure { Log.w(TAG, "getArtist: singles-more fetch failed: ${it.message}") }
         }
 
         Log.d(

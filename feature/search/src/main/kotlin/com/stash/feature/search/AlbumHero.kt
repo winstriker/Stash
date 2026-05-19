@@ -21,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Album
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
@@ -69,6 +70,10 @@ import com.stash.core.ui.util.formatTotalDuration
  *                      reachable when [hasDownloaded] is `true`.
  * @param onDownloadAll Invoked when the Download-All chip is tapped. The
  *                      screen owns dialog + confirm wiring.
+ * @param onPlayAlbum   Invoked when the Play chip is tapped. Plays the
+ *                      album from index 0 — streaming-mode (Kennyy) or
+ *                      downloaded-only depending on user preference,
+ *                      routed through `PlayerRepository.setQueue`.
  */
 @Composable
 fun AlbumHero(
@@ -77,6 +82,7 @@ fun AlbumHero(
     onBack: () -> Unit,
     onShuffle: () -> Unit,
     onDownloadAll: () -> Unit,
+    onPlayAlbum: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val extendedColors = StashTheme.extendedColors
@@ -203,6 +209,22 @@ fun AlbumHero(
             Spacer(Modifier.height(16.dp))
 
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Button(
+                    onClick = onPlayAlbum,
+                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                    shape = RoundedCornerShape(12.dp),
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.PlayArrow,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        text = "Play",
+                        style = MaterialTheme.typography.labelLarge,
+                    )
+                }
                 if (hasDownloaded) {
                     OutlinedButton(
                         onClick = onShuffle,
@@ -221,7 +243,7 @@ fun AlbumHero(
                         )
                     }
                 }
-                Button(
+                OutlinedButton(
                     onClick = onDownloadAll,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
                     shape = RoundedCornerShape(12.dp),

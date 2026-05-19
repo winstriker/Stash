@@ -67,47 +67,113 @@ internal fun parseTracksFromShelf(
 internal fun parseAlbumsCarousel(carousel: JsonObject): List<AlbumSummary> {
     val items = carousel["contents"]?.asArray() ?: return emptyList()
     return items.mapNotNull { item ->
-        val renderer = item.asObject()
+        item.asObject()
             ?.get("musicTwoRowItemRenderer")?.asObject()
-            ?: return@mapNotNull null
+            ?.let { parseAlbumCard(it) }
+    }
+}
 
-        val id = renderer.navigatePath(
-            "navigationEndpoint", "browseEndpoint", "browseId",
-        )?.asString() ?: return@mapNotNull null
+/**
+ * Card-level parser for `musicTwoRowItemRenderer` album/single cards.
+ * Shared between the inline carousel ([parseAlbumsCarousel]) and the
+ * "View all" grid response ([parseAlbumsGridResponse]) — both surfaces
+ * use the same card shape, so the logic lives once here.
+ */
+private fun parseAlbumCard(renderer: JsonObject): AlbumSummary? {
+    val id = renderer.navigatePath(
+        "navigationEndpoint", "browseEndpoint", "browseId",
+    )?.asString() ?: return null
 
-        val title = renderer.navigatePath("title", "runs")?.firstArray()
-            ?.firstOrNull()?.asObject()?.get("text")?.asString()
-            ?: return@mapNotNull null
+    val title = renderer.navigatePath("title", "runs")?.firstArray()
+        ?.firstOrNull()?.asObject()?.get("text")?.asString()
+        ?: return null
 
-        // Subtitle tokens on an artist page: [TypeLabel, " • ", Year] — no artist run.
-        // Strip separators and the leading type label; the first non-year token (if
-        // any) becomes the artist, matching the search "Albums" shelf behaviour.
-        val subtitleTexts = renderer.navigatePath("subtitle", "runs")?.asArray()
-            ?.mapNotNull { it.asObject()?.get("text")?.asString() }
-            ?.filterNot { it == " • " || it == " & " || it == ", " || it == " x " }
-            ?: emptyList()
-        val dataTokens = if (
-            subtitleTexts.firstOrNull()?.let { ALBUM_TYPE_LABELS.contains(it) } == true
-        ) subtitleTexts.drop(1) else subtitleTexts
-        val year = dataTokens.firstOrNull { it.matches(YEAR_REGEX) }
-        val artist = dataTokens.firstOrNull { !it.matches(YEAR_REGEX) } ?: ""
+    // Subtitle tokens on an artist page: [TypeLabel, " • ", Year] — no artist run.
+    // Strip separators and the leading type label; the first non-year token (if
+    // any) becomes the artist, matching the search "Albums" shelf behaviour.
+    val subtitleTexts = renderer.navigatePath("subtitle", "runs")?.asArray()
+        ?.mapNotNull { it.asObject()?.get("text")?.asString() }
+        ?.filterNot { it == " • " || it == " & " || it == ", " || it == " x " }
+        ?: emptyList()
+    val dataTokens = if (
+        subtitleTexts.firstOrNull()?.let { ALBUM_TYPE_LABELS.contains(it) } == true
+    ) subtitleTexts.drop(1) else subtitleTexts
+    val year = dataTokens.firstOrNull { it.matches(YEAR_REGEX) }
+    val artist = dataTokens.firstOrNull { !it.matches(YEAR_REGEX) } ?: ""
 
-        val thumbnails = renderer.navigatePath(
-            "thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails",
-        )?.firstArray()
-        val thumbnailUrl = com.stash.core.common.ArtUrlUpgrader.upgrade(
-            thumbnails?.maxByOrNull {
-                it.asObject()?.get("width")?.asString()?.toIntOrNull() ?: 0
-            }?.asObject()?.get("url")?.asString(),
-        )
+    val thumbnails = renderer.navigatePath(
+        "thumbnailRenderer", "musicThumbnailRenderer", "thumbnail", "thumbnails",
+    )?.firstArray()
+    val thumbnailUrl = com.stash.core.common.ArtUrlUpgrader.upgrade(
+        thumbnails?.maxByOrNull {
+            it.asObject()?.get("width")?.asString()?.toIntOrNull() ?: 0
+        }?.asObject()?.get("url")?.asString(),
+    )
 
-        AlbumSummary(
-            id = id,
-            title = title,
-            artist = artist,
-            thumbnailUrl = thumbnailUrl,
-            year = year,
-        )
+    return AlbumSummary(
+        id = id,
+        title = title,
+        artist = artist,
+        thumbnailUrl = thumbnailUrl,
+        year = year,
+    )
+}
+
+/**
+ * Extracts the "View all" / "More" browseId from a carousel header if
+ * present. YT Music attaches one when the artist has more items than
+ * fit on the main artist page (typically when the discography exceeds
+ * the ~10-card carousel cap). Following the browseId returns a
+ * dedicated browse page with the full grid of cards.
+ *
+ * The header has slightly different shapes depending on which client
+ * variant InnerTube A/B-ships; we check the two known paths.
+ *
+ * Returns null when there is no "more" link (small discography that
+ * already fits in the carousel).
+ */
+internal fun parseCarouselMoreBrowseId(carousel: JsonObject): String? {
+    val header = carousel.navigatePath(
+        "header", "musicCarouselShelfBasicHeaderRenderer",
+    )?.asObject() ?: return null
+    return header.navigatePath(
+        "moreContentButton", "buttonRenderer",
+        "navigationEndpoint", "browseEndpoint", "browseId",
+    )?.asString()
+        ?: header.navigatePath("endIcons")?.firstArray()
+            ?.firstOrNull()?.asObject()
+            ?.navigatePath(
+                "buttonRenderer",
+                "navigationEndpoint", "browseEndpoint", "browseId",
+            )?.asString()
+}
+
+/**
+ * Parses the response returned by the carousel's "View all" browseId.
+ *
+ * Two shapes show up in the wild:
+ *   1. A `gridRenderer` with `items[*].musicTwoRowItemRenderer` cards
+ *      — same shape as the inline carousel cards, just unbounded.
+ *   2. A `musicShelfRenderer` with list-style rows (older clients).
+ *
+ * We only parse (1) for now since (2) is rarer and serves the same
+ * data through a different surface. Falling through to empty signals
+ * the caller to keep the original carousel result.
+ */
+internal fun parseAlbumsGridResponse(response: JsonObject): List<AlbumSummary> {
+    val gridContents = response.navigatePath(
+        "contents", "singleColumnBrowseResultsRenderer", "tabs",
+    )?.firstArray()?.firstOrNull()?.asObject()
+        ?.navigatePath("tabRenderer", "content", "sectionListRenderer", "contents")
+        ?.firstArray()?.firstOrNull()?.asObject()
+        ?.navigatePath("gridRenderer", "items")
+        ?.asArray()
+        ?: return emptyList()
+
+    return gridContents.mapNotNull { item ->
+        item.asObject()
+            ?.get("musicTwoRowItemRenderer")?.asObject()
+            ?.let { parseAlbumCard(it) }
     }
 }
 
