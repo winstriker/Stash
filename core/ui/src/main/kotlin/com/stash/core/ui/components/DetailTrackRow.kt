@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -60,6 +61,7 @@ fun DetailTrackRow(
     onLongPress: () -> Unit,
     showArtist: Boolean = true,
     subtitleOverride: String? = null,
+    isResolving: Boolean = false,
 ) {
     val extendedColors = StashTheme.extendedColors
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -156,12 +158,19 @@ fun DetailTrackRow(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // -- Duration --
-        Text(
-            text = formatDuration(track.durationMs),
-            style = MaterialTheme.typography.bodySmall,
-            color = extendedColors.textTertiary,
-        )
+        // -- Duration / resolving spinner --
+        when {
+            isResolving -> CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = MaterialTheme.colorScheme.primary,
+                strokeWidth = 2.dp,
+            )
+            else -> Text(
+                text = formatDuration(track.durationMs),
+                style = MaterialTheme.typography.bodySmall,
+                color = extendedColors.textTertiary,
+            )
+        }
     }
 }
 

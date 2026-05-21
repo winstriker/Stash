@@ -18,6 +18,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.MusicNote
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -60,6 +61,7 @@ fun TrackListItem(
     isPlaying: Boolean = false,
     onMoreClick: (() -> Unit)? = null,
     onLongPress: (() -> Unit)? = null,
+    isResolving: Boolean = false,
 ) {
     val extendedColors = StashTheme.extendedColors
     val primaryColor = MaterialTheme.colorScheme.primary
@@ -144,16 +146,20 @@ fun TrackListItem(
 
         Spacer(modifier = Modifier.width(8.dp))
 
-        // -- Duration or now-playing indicator --
-        if (isPlaying) {
-            Icon(
+        // -- Resolving spinner / now-playing indicator / duration --
+        when {
+            isResolving -> CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = primaryColor,
+                strokeWidth = 2.dp,
+            )
+            isPlaying -> Icon(
                 imageVector = Icons.Default.GraphicEq,
                 contentDescription = "Now playing",
                 tint = primaryColor,
                 modifier = Modifier.size(18.dp),
             )
-        } else {
-            Text(
+            else -> Text(
                 text = formatDuration(track.durationMs),
                 style = MaterialTheme.typography.bodySmall,
                 color = extendedColors.textTertiary,

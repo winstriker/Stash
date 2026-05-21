@@ -68,6 +68,14 @@ fun PreviewDownloadRow(
      * threaded the new state yet.
      */
     isWaitingForLossless: Boolean = false,
+    /**
+     * v0.9.x extract-coalescing: this row's track is currently being resolved
+     * for streaming (lossless URL fetch / YT fallback). Reuses the existing
+     * preview-button spinner branch so the user sees instant feedback the
+     * moment they tap. Defaults to `false` for back-compat with callers that
+     * don't thread the resolving state yet.
+     */
+    isResolving: Boolean = false,
 ) {
     val extendedColors = StashTheme.extendedColors
 
@@ -145,7 +153,7 @@ fun PreviewDownloadRow(
             modifier = Modifier.size(40.dp),
         ) {
             when {
-                isPreviewLoading -> CircularProgressIndicator(
+                isPreviewLoading || isResolving -> CircularProgressIndicator(
                     modifier = Modifier.size(20.dp),
                     strokeWidth = 2.dp,
                     color = MaterialTheme.colorScheme.primary,

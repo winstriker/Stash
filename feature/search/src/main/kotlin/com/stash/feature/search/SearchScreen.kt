@@ -401,6 +401,7 @@ private fun TopResultCard(
     isDownloaded: Boolean = false,
     isPreviewLoading: Boolean = false,
     isPreviewPlaying: Boolean = false,
+    isResolving: Boolean = false,
     onPreview: () -> Unit = {},
     onStopPreview: () -> Unit = {},
     onDownload: () -> Unit = {},
@@ -499,7 +500,7 @@ private fun TopResultCard(
                 modifier = Modifier.size(40.dp),
             ) {
                 when {
-                    isPreviewLoading -> CircularProgressIndicator(
+                    isPreviewLoading || isResolving -> CircularProgressIndicator(
                         modifier = Modifier.size(20.dp),
                         strokeWidth = 2.dp,
                         color = MaterialTheme.colorScheme.primary,
