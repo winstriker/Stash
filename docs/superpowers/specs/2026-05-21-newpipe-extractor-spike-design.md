@@ -247,7 +247,7 @@ The existing file exercises `raceForTest` against the `TestHooks` interface. Ext
 - `falls_through_to_ytdlp_when_innertube_and_newpipe_both_return_null` — both nullable arms punt; yt-dlp's URL wins.
 - `newpipe_throw_does_not_poison_race` — NewPipe throws `RuntimeException`; race still returns yt-dlp's URL. Asserts the `rescueNull` helper catches non-cancellation throws.
 - `newpipe_cancellation_propagates` — outer scope is cancelled mid-race; assert NewPipe's permit is released (semaphore `availablePermits` returns to baseline).
-- `winner_field_reflects_arm_that_produced_url` — drive each arm to win in turn; assert the value PreviewUrlExtractor stamps for LATDIAG matches.
+- `winner_field_reflects_arm_that_produced_url` — drive each arm to win in turn; assert `raceForTest` reports the right `winner` value. To enable this, `raceForTest` is extended to return `Pair<String, String>` (url, winner) instead of just `String`. The internal `race()` similarly returns the pair so the call site in `extractStreamUrl` can stamp LATDIAG with the value the race produced rather than guessing from outside.
 
 Timing via `runTest` + `advanceTimeBy`, matching the existing file's style.
 
