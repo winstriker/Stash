@@ -105,6 +105,7 @@ fun SearchScreen(
     val downloadedIds by viewModel.delegate.downloadedIds.collectAsStateWithLifecycle()
     val waitingForLosslessIds by viewModel.delegate.waitingForLosslessIds.collectAsStateWithLifecycle()
     val previewLoadingId by viewModel.delegate.previewLoadingId.collectAsStateWithLifecycle()
+    val tappedTrackId by viewModel.tappedTrackId.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
@@ -141,6 +142,7 @@ fun SearchScreen(
                     waitingForLosslessIds = waitingForLosslessIds,
                     previewLoadingId = previewLoadingId,
                     previewState = previewState,
+                    tappedTrackId = tappedTrackId,
                     losslessPrefetcher = viewModel.losslessPrefetcher,
                     onArtistClick = { a -> onNavigateToArtist(a.id, a.name, a.avatarUrl) },
                     onAlbumClick = onNavigateToAlbum,
@@ -245,6 +247,7 @@ private fun SectionedResultsList(
     waitingForLosslessIds: Set<String>,
     previewLoadingId: String?,
     previewState: PreviewState,
+    tappedTrackId: Long?,
     losslessPrefetcher: LosslessUrlPrefetcher,
     onArtistClick: (ArtistSummary) -> Unit,
     onAlbumClick: (AlbumSummary) -> Unit,
@@ -301,6 +304,7 @@ private fun SectionedResultsList(
                             isPreviewLoading = previewLoadingId == videoId,
                             isPreviewPlaying = previewState is PreviewState.Playing &&
                                 previewState.videoId == videoId,
+                            isResolving = (videoId.hashCode().toLong() == tappedTrackId),
                             onPreview = { onPreview(top.track.toTrackItem()) },
                             onStopPreview = onStopPreview,
                             onDownload = { onDownload(top.track) },
@@ -331,6 +335,7 @@ private fun SectionedResultsList(
                             isPreviewLoading = previewLoadingId == t.videoId,
                             isPreviewPlaying = previewState is PreviewState.Playing &&
                                 previewState.videoId == t.videoId,
+                            isResolving = (t.videoId.hashCode().toLong() == tappedTrackId),
                             onPreview = { onPreview(t.toTrackItem()) },
                             onStopPreview = onStopPreview,
                             onDownload = { onDownload(t) },
