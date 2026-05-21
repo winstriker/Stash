@@ -248,11 +248,11 @@ fun extractStreamUrl_coalesces_concurrent_calls_to_same_videoId() = runTest {
 internal suspend fun extractStreamUrlForTest(hooks: TestHooks, videoId: String): String {
     // Skipping the full real wrapper — for the coalescing test, we
     // emulate the same single-flight pattern around raceForTest.
-    return _extractStreamUrlInternal(videoId) { raceForTest(hooks, it) }
+    return coalesce(videoId) { raceForTest(hooks, it) }
 }
 ```
 
-(Implementation detail: the wrapper will internally delegate to a `private suspend fun _extractStreamUrlInternal(videoId: String, doRace: suspend (String) -> String): String` that contains the coalescing logic. This lets both production `extractStreamUrl` and the test helper share the wrapper.)
+(Implementation detail: the wrapper is `private suspend fun coalesce(videoId: String, doRace: suspend (String) -> String): String` — landed in Step 3d below. Both production `extractStreamUrl` and the test helper delegate to it. Step 3e covers why `extractStreamUrlForTest` must be an instance member, not in the companion.)
 
 Imports needed:
 ```kotlin
@@ -266,7 +266,7 @@ import java.util.concurrent.atomic.AtomicInteger
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `./gradlew :data:download:testDebugUnitTest --tests "com.stash.data.download.preview.PreviewUrlExtractorTest.extractStreamUrl_coalesces_concurrent_calls_to_same_videoId"`
-Expected: COMPILATION FAIL — `extractStreamUrlForTest` and `_extractStreamUrlInternal` don't exist yet.
+Expected: COMPILATION FAIL — `extractStreamUrlForTest` and `coalesce` don't exist yet.
 
 - [ ] **Step 3: Implement the coalescing wrapper**
 
@@ -887,17 +887,17 @@ TopResultCard(
 
 (Use `top.track.videoId.hashCode().toLong()` since `TrackSummary` doesn't have a `TrackItem.syntheticId()` helper — inline the derivation. Alternative: extract a parallel helper on `TrackSummary` if you want one. Keep inline for now; the duplication is one place.)
 
-**`PreviewDownloadRow` (around line 339):** the actual call site uses `item = item` (or the lambda's `t` parameter), not `track = track`. Match the existing parameter name. The lambda param is `t`, so:
+**`PreviewDownloadRow` (around line 339):** the actual call site uses `item = item` (or the lambda's `t` parameter), not `track = track`. Match the existing parameter name. Use the `TrackItem.syntheticId()` helper from Task 6 for consistency with the SearchViewModel side (which also calls `item.syntheticId()`):
 
 ```kotlin
 PreviewDownloadRow(
     item = t,
     // ... existing args ...
-    isResolving = (t.videoId.hashCode().toLong() == tappedTrackId),
+    isResolving = (t.syntheticId() == tappedTrackId),
 )
 ```
 
-Verify by reading the existing call site before editing — adapt to whatever the actual parameter shape is.
+The `TopResultCard` call site stays inline (`top.track.videoId.hashCode().toLong()`) because `top.track` is a `TrackSummary`, not a `TrackItem` — the helper doesn't apply there. Verify by reading the actual call sites before editing.
 
 - [ ] **Step 4: Compile**
 
@@ -957,7 +957,7 @@ The existing body is different in each VM (different stream-vs-disk filtering, d
 
 `feature/library/src/` currently has no `test/` directory and `feature/library/build.gradle.kts` declares zero `testImplementation` deps. Before writing a test, set up the classpath.
 
-**3a.** Open `feature/library/build.gradle.kts` and add a `dependencies { }` block (or extend the existing one) to mirror `feature/search/build.gradle.kts`'s test block:
+**3a.** Open `feature/library/build.gradle.kts` and add a `dependencies { }` block (or extend the existing one) with the test deps needed for the new VM tests. The new Library tests use MockK + Truth (matching the spec's testing style), not Mockito-Kotlin — so this list is *canonical*, not copied from `feature/search` (which uses Mockito-Kotlin and would be the wrong template):
 
 ```kotlin
 testImplementation("junit:junit:4.13.2")
@@ -966,7 +966,7 @@ testImplementation("com.google.truth:truth:1.4.4")
 testImplementation(libs.mockk)
 ```
 
-(Cross-reference with `feature/search/build.gradle.kts` for the exact set; copy verbatim.)
+If the project already declares any of these via a convention plugin (`stash.android.feature`?), you may not need to duplicate — try the test build first, add only what's missing.
 
 **3b.** Create the test directory: `feature/library/src/test/kotlin/com/stash/feature/library/`.
 
