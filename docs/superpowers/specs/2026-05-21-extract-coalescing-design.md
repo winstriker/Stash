@@ -15,7 +15,7 @@ The 11 s yt-dlp baseline is unchanged; this branch addresses the *layering* that
 
 The `feat/tap-cancel-hardening` branch ran an on-device verification (Task 8) that showed the gate did not prevent rapid retaps from cascading into yt-dlp's 3-120 ms `YoutubeDLException` fast-fail. Three root causes were identified post-mortem:
 
-1. **`PreviewPrefetcher.kt:71` calls `extractStreamUrl(id)` directly**, bypassing the `PlayerRepository` gate entirely. Every search triggers `prefetchTopN`, which fires 3 background yt-dlp resolves. When a user taps a row mid-prefetch, `playFromStream` acquires the gate, but the prefetcher's call is already in flight on a separate code path. yt-dlp-android cannot handle concurrent JNI invocations — one fails with `YoutubeDLException` at ~120 ms, propagating as `NotAvailable` → snackbar.
+1. **`PreviewPrefetcher.kt:71` calls `extractStreamUrl(id)` directly**, bypassing the `PlayerRepository` gate entirely. Every search triggers `prefetchTopN`, which fires up to `PREFETCH_TOP_N = 6` background yt-dlp resolves. When a user taps a row mid-prefetch, `playFromStream` acquires the gate, but the prefetcher's call is already in flight on a separate code path. yt-dlp-android cannot handle concurrent JNI invocations — one fails with `YoutubeDLException` at ~120 ms, propagating as `NotAvailable` → snackbar.
 
 2. **Library tracks have `youtubeId = null` at tap-time** for the Spotify-imported population. The gate keys on `firstTrack.youtubeId`, so the gate path is skipped entirely; the StateFlow is never set; no spinner appears during the 1-3 s `searchYouTubeForVideoId` call followed by the ~11 s `extractStreamUrl` call.
 
@@ -46,7 +46,7 @@ PreviewUrlExtractor
 
 SPINNER UI LAYER (intent — what the user tapped)
     │
-SearchViewModel + 5 Library VMs
+SearchViewModel + 4 Library *DetailViewModels
     ├─ tappedTrackId: MutableStateFlow<Long?>(null)
     │
     └─ on tap:
@@ -165,9 +165,11 @@ companion object {
 
 **Failure propagation contract.** If `doExtract` throws, the `Deferred` completes exceptionally. *All* awaiters see the same exception — by design. The entry self-removes via `invokeOnCompletion`, so the next call for that videoId starts a fresh extract.
 
-### VM-local `tappedTrackId` state (6 ViewModels)
+### VM-local `tappedTrackId` state (5 ViewModels)
 
-Each VM gets the same pattern:
+**Scope clarification:** SearchViewModel + 4 *DetailViewModels (`LikedSongsDetailViewModel`, `PlaylistDetailViewModel`, `AlbumDetailViewModel`, `ArtistDetailViewModel`). `LibraryViewModel` is intentionally excluded — its `playTrack(track: Track, allTracks: List<Track>)` early-returns when `track.filePath == null` (line 241), meaning it doesn't handle streaming at all today. The Library tab shows downloaded files only; streaming taps happen from the four DetailScreens. Adding streaming to `LibraryViewModel` is out of scope.
+
+Each of the 5 VMs gets the same pattern:
 
 ```kotlin
 private val _tappedTrackId = MutableStateFlow<Long?>(null)
@@ -223,9 +225,20 @@ fun playTrack(trackId: Long) {
 - `viewModelScope` cancellation on navigation clears via `finally`.
 - No cross-screen persistence — if the user navigates mid-load, the spinner does not follow them, but the underlying extract continues on `extractorScope` so coming back finds a warm `PreviewUrlCache`.
 
-### Row composables (already shaped correctly from previous branch)
+### Row composables — re-do on this branch (not cherry-picked)
 
-`core/ui/components/DetailTrackRow.kt` and `TrackListItem.kt` keep their `isResolving: Boolean = false` parameter + `CircularProgressIndicator` branch from the cherry-pick. The screen-level wiring changes:
+The previous branch added `isResolving: Boolean = false` parameters + spinner branches to `DetailTrackRow.kt`, `TrackListItem.kt`, `PreviewDownloadRow.kt`, and `TopResultCard` (inline in `SearchScreen.kt`). At the `feat/yt-fallback-resolver` baseline these parameters do NOT exist — those commits (`f1f7cdb`, `3b5c215`, `9facc84`, `d7eb72d`) are intentionally NOT in the cherry-pick list because they were paired with the wrong-key comparison.
+
+**This branch re-adds the parameters and spinner branches** as a clean standalone commit:
+
+- `DetailTrackRow.kt`: new `isResolving: Boolean = false` parameter + `CircularProgressIndicator(20.dp, primary, 2.dp stroke)` branch in the trailing slot.
+- `TrackListItem.kt`: same parameter + same spinner; priority order `isResolving > isPlaying > duration`.
+- `PreviewDownloadRow.kt`: same parameter; spinner branch ORs with the existing `isPreviewLoading`.
+- `TopResultCard` (private in `SearchScreen.kt`): same parameter + same spinner OR pattern as `PreviewDownloadRow`.
+
+These are pure parameter additions with `= false` defaults — every existing caller continues to compile (including `BlockedSongsScreen.kt` + `FailedMatchesScreen.kt` which use private row composables and aren't affected anyway).
+
+The screen-level wiring changes:
 
 ```kotlin
 // SearchScreen, Library screens:
