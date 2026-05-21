@@ -199,7 +199,7 @@ fun onResultTap(item: TrackItem) {
 }
 ```
 
-**Library VMs (5 of them) playTrack**:
+**Library *DetailVMs (4 of them) playTrack**:
 
 ```kotlin
 fun playTrack(trackId: Long) {
