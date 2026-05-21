@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
@@ -65,6 +66,9 @@ class PlaylistDetailViewModel @Inject constructor(
 
     private val _searchQuery = MutableStateFlow("")
     private val _showSearch = MutableStateFlow(false)
+
+    private val _tappedTrackId = MutableStateFlow<Long?>(null)
+    val tappedTrackId: StateFlow<Long?> = _tappedTrackId.asStateFlow()
 
     fun onSearchQueryChanged(query: String) { _searchQuery.value = query }
     fun clearSearch() { _searchQuery.value = "" }
@@ -137,19 +141,24 @@ class PlaylistDetailViewModel @Inject constructor(
      */
     fun playTrack(trackId: Long) {
         viewModelScope.launch {
-            // In streaming mode the queue includes synced-but-not-downloaded
-            // tracks (they'll resolve via Kennyy inside setQueue). In offline
-            // mode we still filter to downloaded-only so we don't enqueue
-            // unplayable items.
-            val streamingOn = streamingPreference.current()
-            val playable = if (streamingOn) {
-                uiState.value.tracks
-            } else {
-                uiState.value.tracks.filter { it.filePath != null }
+            _tappedTrackId.value = trackId
+            try {
+                // In streaming mode the queue includes synced-but-not-downloaded
+                // tracks (they'll resolve via Kennyy inside setQueue). In offline
+                // mode we still filter to downloaded-only so we don't enqueue
+                // unplayable items.
+                val streamingOn = streamingPreference.current()
+                val playable = if (streamingOn) {
+                    uiState.value.tracks
+                } else {
+                    uiState.value.tracks.filter { it.filePath != null }
+                }
+                if (playable.isEmpty()) return@launch
+                val index = playable.indexOfFirst { it.id == trackId }.coerceAtLeast(0)
+                playerRepository.setQueue(playable, index)
+            } finally {
+                _tappedTrackId.value = null
             }
-            if (playable.isEmpty()) return@launch
-            val index = playable.indexOfFirst { it.id == trackId }.coerceAtLeast(0)
-            playerRepository.setQueue(playable, index)
         }
     }
 

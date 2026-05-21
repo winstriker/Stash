@@ -12,6 +12,7 @@ import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -70,6 +71,9 @@ class AlbumDetailViewModel @Inject constructor(
     private val _searchQuery = MutableStateFlow("")
     private val _showSearch = MutableStateFlow(false)
 
+    private val _tappedTrackId = MutableStateFlow<Long?>(null)
+    val tappedTrackId: StateFlow<Long?> = _tappedTrackId.asStateFlow()
+
     fun onSearchQueryChanged(query: String) { _searchQuery.value = query }
     fun clearSearch() { _searchQuery.value = "" }
     fun toggleSearch() {
@@ -123,10 +127,15 @@ class AlbumDetailViewModel @Inject constructor(
      */
     fun playTrack(trackId: Long) {
         viewModelScope.launch {
-            val downloaded = uiState.value.tracks.filter { it.filePath != null }
-            if (downloaded.isEmpty()) return@launch
-            val index = downloaded.indexOfFirst { it.id == trackId }.coerceAtLeast(0)
-            playerRepository.setQueue(downloaded, index)
+            _tappedTrackId.value = trackId
+            try {
+                val downloaded = uiState.value.tracks.filter { it.filePath != null }
+                if (downloaded.isEmpty()) return@launch
+                val index = downloaded.indexOfFirst { it.id == trackId }.coerceAtLeast(0)
+                playerRepository.setQueue(downloaded, index)
+            } finally {
+                _tappedTrackId.value = null
+            }
         }
     }
 
