@@ -651,6 +651,17 @@ class PlayerRepositoryImpl @Inject constructor(
         }
     }
 
+    override suspend fun addToQueue(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        val controller = ensureController() ?: return
+        val wasEmpty = controller.mediaItemCount == 0
+        controller.addMediaItems(tracks.map { it.toMediaItem() })
+        if (wasEmpty) {
+            controller.prepare()
+            controller.play()
+        }
+    }
+
     override suspend fun toggleShuffle() {
         val controller = ensureController() ?: return
         controller.sendCustomCommand(

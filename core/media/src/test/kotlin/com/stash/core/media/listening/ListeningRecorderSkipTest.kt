@@ -56,6 +56,7 @@ class ListeningRecorderSkipTest {
         override suspend fun shuffleLibrary() = Unit
         override suspend fun addNext(track: Track) = Unit
         override suspend fun addToQueue(track: Track) = Unit
+        override suspend fun addToQueue(tracks: List<Track>) = Unit
         override suspend fun toggleShuffle() = Unit
         override suspend fun cycleRepeatMode() = Unit
         override suspend fun removeFromQueue(index: Int) = Unit
