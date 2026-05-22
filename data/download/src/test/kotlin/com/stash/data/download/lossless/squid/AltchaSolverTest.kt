@@ -5,18 +5,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Verifies the Kotlin port of altcha-lib v2's SHA-256 PoW against the
- * canonical test vectors from
- * `altcha-org/altcha-lib/tests/v2/algorithms/sha.test.ts`.
+ * Verifies the Kotlin port of squid.wtf's per-iteration-truncating
+ * SHA-256 PoW against a vector captured from a live HAR against the
+ * production `/api/altcha/verify` endpoint.
  *
- * If any of these fail, the squid.wtf verify endpoint will reject our
- * payload — the algorithm is bit-exact by design.
+ * NOTE: This algorithm intentionally does NOT match altcha-lib v2's
+ * published test vectors — squid.wtf's deployed widget diverges from
+ * the public spec by truncating the digest to keyLength bytes every
+ * iteration. See KDoc on [AltchaSolver].
+ *
+ * If the captured vector below fails, the server will reject our
+ * verify payload — the algorithm is bit-exact by design.
  */
 class AltchaSolverTest {
-
-    private val vectorNonce = "39baf91a19d671f8231217f9e28342a6"
-    private val vectorSalt = "5e00d5d152e1a5db7d44fb6404a40a5e"
-    private val vectorCounter = 123  // big-endian uint32 = 00 00 00 7B
 
     /**
      * Builds the password buffer the deriveKey function expects:
@@ -32,57 +33,55 @@ class AltchaSolverTest {
         )
     }
 
-    @Test fun `SHA-256 cost=1 keyLength=32 matches reference vector`() {
+    /**
+     * Captured from a successful live HAR against
+     * `qobuz.squid.wtf/api/altcha/verify` — these exact bytes produced
+     * a 200 OK + `Set-Cookie: captcha_verified_at=...` response. If
+     * this test fails, the deployed algorithm has changed and the
+     * NativeSquidCaptchaSolver will start getting rejected.
+     */
+    @Test fun `iter-trunc keyLength=16 cost=1000 matches squidwtf HAR capture`() {
         val derived = AltchaSolver.deriveSha256(
-            salt = hexToBytes(vectorSalt),
-            password = password(vectorNonce, vectorCounter),
-            cost = 1,
-            keyLength = 32,
+            salt = hexToBytes("e65ed142765c347ee6796a236764127f"),
+            password = password("b0eb239700bc6339bd9a709a9c053dfc", 14),
+            cost = 1000,
+            keyLength = 16,
         )
-        assertEquals(
-            "6deccc5eecdb14c99d57129ef8f2f7d3e71812d8bd022c1caaf9e56512ec186c",
-            bytesToHex(derived),
-        )
+        assertEquals("007f879634bb579611f8bee2d0d24812", bytesToHex(derived))
     }
 
-    @Test fun `SHA-256 cost=2 keyLength=32 matches reference vector`() {
-        val derived = AltchaSolver.deriveSha256(
-            salt = hexToBytes(vectorSalt),
-            password = password(vectorNonce, vectorCounter),
-            cost = 2,
-            keyLength = 32,
-        )
-        assertEquals(
-            "54129dc0097cb40d1c75bd8dc1e5f713839b285d72f9685a3d91ab76ca2746ad",
-            bytesToHex(derived),
-        )
-    }
-
-    @Test fun `keyLength truncates the digest`() {
+    /**
+     * Single-iteration test: with cost=1 the algorithm reduces to
+     * `SHA-256(salt || password)[0 ..< keyLength]`, which IS a prefix
+     * of the full 32-byte digest. (For cost > 1 this no longer holds —
+     * each round's truncation cascades.)
+     */
+    @Test fun `keyLength truncates the single-round digest`() {
+        val nonce = "b0eb239700bc6339bd9a709a9c053dfc"
+        val salt = "e65ed142765c347ee6796a236764127f"
         val full = AltchaSolver.deriveSha256(
-            salt = hexToBytes(vectorSalt),
-            password = password(vectorNonce, vectorCounter),
+            salt = hexToBytes(salt),
+            password = password(nonce, 14),
             cost = 1,
             keyLength = 32,
         )
         val truncated = AltchaSolver.deriveSha256(
-            salt = hexToBytes(vectorSalt),
-            password = password(vectorNonce, vectorCounter),
+            salt = hexToBytes(salt),
+            password = password(nonce, 14),
             cost = 1,
             keyLength = 16,
         )
         assertEquals(16, truncated.size)
-        // Truncation = take the first keyLength bytes of the full digest.
+        // Single-round truncation = take the first keyLength bytes of
+        // the full digest.
         assertEquals(bytesToHex(full.copyOf(16)), bytesToHex(truncated))
     }
 
     /**
      * End-to-end: feed the solver a challenge whose answer we control.
      * Expectation: it finds *some* counter whose first byte is 0x00.
-     * The first such counter for these particular parameters happens
-     * to be 47 (verified by running the algorithm by hand in the test
-     * setup), but we don't hardcode that — the contract is "derived
-     * key starts with prefix", not "specific counter value".
+     * The contract is "derived key starts with prefix", not "specific
+     * counter value" — that's a function of the (changed) algorithm.
      */
     @Test fun `solve finds a counter producing the required prefix`() {
         val params = ChallengeParameters(

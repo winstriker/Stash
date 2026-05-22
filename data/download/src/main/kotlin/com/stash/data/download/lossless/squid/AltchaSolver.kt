@@ -5,22 +5,25 @@ import java.security.MessageDigest
 
 /**
  * Solves the proof-of-work challenge that gates `qobuz.squid.wtf`'s
- * download endpoints. The challenge is the
- * [ALTCHA library v2 PoW format](https://github.com/altcha-org/altcha-lib)
- * — given (`nonce`, `salt`, `keyPrefix`, `keyLength`, `cost`,
- * `algorithm = "SHA-256"`), find the smallest `counter` whose derived
- * key starts with `keyPrefix`. Derivation is plain repeated SHA-256
- * (NOT HKDF or PBKDF2 — the field names superficially resemble HKDF
- * but the algorithm spelt out in `altcha-lib/v2/algorithms/sha.ts` is
- * iterated raw SHA-256).
+ * download endpoints. Given (`nonce`, `salt`, `keyPrefix`, `keyLength`,
+ * `cost`, `algorithm = "SHA-256"`), finds the smallest `counter`
+ * whose derived key starts with `keyPrefix`.
+ *
+ * **NOT the published altcha-lib v2 algorithm.** The deployed
+ * altcha-widget on squid.wtf diverges from `altcha-lib/v2/algorithms/sha.ts`:
+ * it truncates the digest to `keyLength` bytes every iteration and
+ * feeds the truncated bytes back into the next SHA-256 round, rather
+ * than keeping the full 32-byte digest across iterations and
+ * truncating only at the end. Independently confirmed via live HAR
+ * capture against the production verify endpoint — see test vector
+ * in [AltchaSolverTest].
  *
  * Sketch:
  * ```
  * password = nonce || uint32_BE(counter)
- * digest   = SHA-256(salt || password)
- * repeat (cost - 1):  digest = SHA-256(digest)
- * derivedKey = digest[0 ..< keyLength]
- * if derivedKey.startsWith(keyPrefix): return counter
+ * derived  = SHA-256(salt || password)[0 ..< keyLength]
+ * repeat (cost - 1):  derived = SHA-256(derived)[0 ..< keyLength]
+ * if derived.startsWith(keyPrefix): return counter
  * else: counter++
  * ```
  *
@@ -31,7 +34,7 @@ import java.security.MessageDigest
  * under a second on a modern Android device.
  *
  * Pure JVM — no Android imports — so it lives in main and runs in
- * unit tests against the published altcha-lib test vectors.
+ * unit tests.
  */
 internal object AltchaSolver {
 
@@ -78,9 +81,16 @@ internal object AltchaSolver {
     }
 
     /**
-     * Deterministic key derivation matching `altcha-lib/v2/algorithms/sha.ts`.
-     * Internal so tests can hit it directly with the published vectors
-     * without going through the brute-force loop.
+     * Deterministic key derivation matching the squid.wtf altcha-widget
+     * deployment (NOT altcha-lib v2's published behavior). Internal so
+     * tests can hit it directly without going through the brute-force
+     * loop.
+     *
+     * Each iteration truncates the SHA-256 output to [keyLength] bytes
+     * before feeding it into the next round. The intermediate 32-byte
+     * digest is discarded — this is the bit that diverges from the
+     * published spec and was breaking server-side verification before
+     * the fix.
      */
     internal fun deriveSha256(
         salt: ByteArray,
@@ -88,18 +98,23 @@ internal object AltchaSolver {
         cost: Int,
         keyLength: Int,
     ): ByteArray {
-        // First round: hash(salt || password). Subsequent rounds:
-        // hash(previous_digest). MessageDigest.digest() resets state,
-        // so we can reuse a single instance across iterations.
+        // First iteration uses salt || password as input.
         val md = MessageDigest.getInstance("SHA-256")
         md.update(salt)
         md.update(password)
-        var digest = md.digest()
+        var derived = md.digest().truncate(keyLength)
+        // Each subsequent iteration feeds the TRUNCATED keyLength bytes
+        // back through SHA-256, not the full 32-byte digest. This matches
+        // squid.wtf's altcha-widget behavior, which diverges from public
+        // altcha-lib v2 by truncating at every step.
         repeat(cost - 1) {
-            digest = md.digest(digest)
+            derived = md.digest(derived).truncate(keyLength)
         }
-        return if (keyLength >= digest.size) digest else digest.copyOf(keyLength)
+        return derived
     }
+
+    private fun ByteArray.truncate(keyLength: Int): ByteArray =
+        if (keyLength >= size) this else copyOf(keyLength)
 
     private fun startsWith(haystack: ByteArray, needle: ByteArray): Boolean {
         if (haystack.size < needle.size) return false
