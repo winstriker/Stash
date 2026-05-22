@@ -184,24 +184,21 @@ User explicitly requested "only when Kennyy is down" and "only when the app is a
 
 ProcessLifecycle + Kennyy-health gate gives exactly the requested envelope.
 
-## Open questions
+## Resolved decisions
 
-1. **Source-layer logging surface name.** Do we want one tag per source (`KennyySource`, `QobuzSource`) or a shared `LosslessSource` tag for cross-source greppability? Recommend per-source for clarity at the call site; cross-source filtering is easy with regex.
+1. **Source-layer logging surface name.** Per-source tags (`KennyySource`, `QobuzSource`). Clarity at the call site beats marginal greppability gain; cross-source filtering via regex is trivial.
 
-2. **Cascade-guard event surface.** Spec says SharedFlow + Snackbar in the foregrounded screen. Alternative: a `StateFlow<StreamingHealth>` ({Healthy, Halted}) that any UI can collect. Recommend SharedFlow because the event is transient (the Snackbar shouldn't redisplay on rotation); the *paused* state is already reflected in the existing playback state.
+2. **Cascade-guard event surface.** `SharedFlow<StreamingHaltedEvent>`. The Snackbar is a transient notification; it shouldn't redisplay on rotation. The *paused* state is already exposed via existing playback state.
 
-3. **What counts as "Kennyy failed."** Confident options:
-   - Network failure (timeout, no route, DNS fail) — yes.
-   - HTTP 5xx — yes.
-   - HTTP 4xx — yes (proxy reachable but rejecting our query).
-   - `null` from successful HTTP (no match in catalog) — **probably no**. Per-track misses are normal and shouldn't trip the health monitor. Recommend treating `null` distinctly from `throw`.
+3. **What counts as "Kennyy failed" for the health window.**
+   - Network failure (timeout, no route, DNS fail) — **counts.**
+   - HTTP 5xx — **counts.**
+   - HTTP 4xx (proxy reachable but rejecting our query) — **counts.**
+   - `null` from successful HTTP (no match in catalog) — **does NOT count.** Per-track catalog misses are normal and shouldn't trip the health monitor; only proxy-level distress signals do.
 
-   Decision needed: should "no match" tracks be excluded from the health window?
+   Implementation: `KennyySource.resolveImmediate` already returns null for both "no match" and "request failed." The plan must add a distinct signal (sealed result, parallel error channel, or per-failure log inspection) so `KennyyStreamResolver` can call `monitor.recordFailure()` only for the latter.
 
-4. **Auto-refresh cadence.** 25 min hardcoded vs. derive from cookie age?
-   - Hardcoded is simple; user changes nothing.
-   - Derived (refresh when cookie is N minutes old) handles edge case where the user manually re-auths shortly before the auto-refresh would fire.
-   - Recommend derived: read `captchaCookieSetAtMs`, schedule refresh for `setAt + 25min` minus current time. If already past, refresh immediately.
+4. **Auto-refresh cadence.** **Derived from cookie age.** Read `captchaCookieSetAtMs`, schedule next refresh for `setAt + 25min - now`. If already past, refresh immediately. Handles the edge case where the user manually re-auths shortly before the auto-refresh would have fired.
 
 ## Non-goals
 
