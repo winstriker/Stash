@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.stash.core.data.db.dao.DownloadQueueDao
@@ -47,6 +48,7 @@ class LosslessSourcePreferences @Inject constructor(
     private val minQualityKey = stringPreferencesKey("min_quality")
     private val enabledKey = booleanPreferencesKey("enabled")
     private val captchaCookieKey = stringPreferencesKey("squid_wtf_captcha_verified_at")
+    private val captchaCookieSetAtKey = longPreferencesKey("squid_wtf_captcha_set_at_ms")
     private val bannerDismissedKey = booleanPreferencesKey("home_banner_dismissed")
     private val qualityTierKey = stringPreferencesKey("lossless_quality_tier")
     private val youtubeFallbackKey = booleanPreferencesKey("youtube_fallback_enabled")
@@ -130,13 +132,29 @@ class LosslessSourcePreferences @Inject constructor(
         prefs[captchaCookieKey]?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * Wall-clock epoch-millis when the current captcha cookie was set.
+     * Emits 0L when no cookie has ever been stored or the most recent
+     * value was cleared. Used by SquidCookieAutoRefresher to derive
+     * cookie age and schedule the next refresh ~25 min after set.
+     */
+    val captchaCookieSetAtMs: Flow<Long> = context.losslessDataStore.data.map { prefs ->
+        prefs[captchaCookieSetAtKey] ?: 0L
+    }
+
     suspend fun captchaCookieValueNow(): String? = captchaCookieValue.first()
 
     suspend fun setCaptchaCookieValue(value: String?) {
+        val now = System.currentTimeMillis()
         context.losslessDataStore.edit { prefs ->
             val trimmed = value?.trim()?.takeIf { it.isNotEmpty() }
-            if (trimmed == null) prefs.remove(captchaCookieKey)
-            else prefs[captchaCookieKey] = trimmed
+            if (trimmed == null) {
+                prefs.remove(captchaCookieKey)
+                prefs.remove(captchaCookieSetAtKey)
+            } else {
+                prefs[captchaCookieKey] = trimmed
+                prefs[captchaCookieSetAtKey] = now
+            }
         }
     }
 
