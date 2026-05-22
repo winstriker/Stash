@@ -345,7 +345,13 @@ class QobuzSource @Inject constructor(
                 // contractions like "don't" tokenize as "don t" instead
                 // of "dont" and pollute the Jaccard set.
                 .replace(Regex("[''`]"), "")
-                .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+                // v0.9.x: include \p{S} (Symbols, incl. Currency) so stylized artist
+                // names like "¥$" (Kanye+Ty Dolla $ign), "$NOT", "+44", "!!!" survive
+                // normalization. Without this they stripped to empty string and
+                // artistSimilarity returned 0 for every catalog match, even when the
+                // title was an exact hit. Punctuation (\p{P}) still gets stripped, so
+                // commas/dashes/parens still tokenize correctly.
+                .replace(Regex("[^\\p{L}\\p{N}\\p{S}\\s]"), " ")
                 .replace(Regex("\\s+"), " ")
                 .trim()
 
@@ -369,12 +375,16 @@ class QobuzSource @Inject constructor(
          *  - Spotify: "Diana Ross and the Supremes" → Qobuz: "The Supremes"
          *  - Spotify: "Joey Bada$$ feat. Jay Electronica" → Qobuz: "Joey Bada$$"
          *  - Spotify: "Ghostemane, Shakewell, Pouya" → Qobuz: "Ghostemane"
+         *  - Spotify: "¥$, Kanye West, Ty Dolla $ign" → Qobuz: "¥$"
          *
          * Includes the single-canonical-artist case (Qobuz indexes
          * one lead artist where Spotify expands to a featuring list).
          * "Distinctive" gating guards against generic 1-3 char tokens
          * ("Air", "U2") spuriously matching unrelated acts that
          * happen to share that token.
+         * Stylized short names with symbols (¥$, $NOT, +44) bypass the
+         * length-only check via the non-alphanumeric clause — they're rare
+         * enough to be safe matches.
          *
          * Final fallback is plain jaccard, so unrelated artists with
          * partial token overlap still score reasonably.
@@ -390,7 +400,14 @@ class QobuzSource @Inject constructor(
 
             val smallerSize = minOf(setA.size, setB.size)
             val smallerFullyCovered = intersection.size == smallerSize
-            val hasDistinctiveOverlap = intersection.any { it.length > 3 }
+            // Distinctive = length > 3 OR contains a non-alphanumeric character.
+            // The second clause catches stylized short artist names like "¥$",
+            // "$NOT", "+44" — they're unique enough not to spuriously match.
+            // Common short generic tokens ("the", "u2") remain non-distinctive
+            // since they're pure alphanumeric and short.
+            val hasDistinctiveOverlap = intersection.any { token ->
+                token.length > 3 || token.any { ch -> !ch.isLetterOrDigit() }
+            }
 
             val coverageScore = if (smallerFullyCovered && hasDistinctiveOverlap) {
                 1.0f

@@ -1,5 +1,6 @@
 package com.stash.data.download.lossless.qobuz
 
+import com.google.common.truth.Truth.assertThat
 import com.stash.data.download.lossless.AggregatorRateLimiter
 import com.stash.data.download.lossless.LosslessQualityTier
 import com.stash.data.download.lossless.LosslessSourcePreferences
@@ -305,5 +306,34 @@ class QobuzSourceTest {
 
     @Test fun `artistSimilarity returns 1 for identical strings`() {
         assertEquals(1.0f, QobuzSource.artistSimilarity("radiohead", "radiohead"), 0.001f)
+    }
+
+    @Test
+    fun `artistSimilarity matches yen-dollar against expanded form`() {
+        val score = QobuzSource.artistSimilarity(
+            QobuzSource.normalize("¥$, Kanye West, Ty Dolla \$ign"),
+            QobuzSource.normalize("¥$"),
+        )
+        // Subset coverage should hit since "¥$" is fully contained and
+        // distinctive (non-alphanumeric).
+        assertThat(score).isAtLeast(0.5f)
+    }
+
+    @Test
+    fun `normalize preserves currency symbols`() {
+        assertThat(QobuzSource.normalize("¥$")).isEqualTo("¥$")
+        assertThat(QobuzSource.normalize("\$NOT")).isEqualTo("\$not")
+        assertThat(QobuzSource.normalize("+44")).isEqualTo("+44")
+    }
+
+    @Test
+    fun `artistSimilarity still rejects generic short tokens`() {
+        // "U2" vs "Air": both length-2 letter-only tokens, should NOT
+        // hit the distinctive-overlap shortcut and should score low.
+        val score = QobuzSource.artistSimilarity(
+            QobuzSource.normalize("U2"),
+            QobuzSource.normalize("Air"),
+        )
+        assertThat(score).isLessThan(0.5f)
     }
 }
