@@ -2,6 +2,9 @@ package com.stash.app
 
 import android.app.Application
 import androidx.hilt.work.HiltWorkerFactory
+import androidx.lifecycle.DefaultLifecycleObserver
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.ProcessLifecycleOwner
 import androidx.work.Configuration
 import androidx.work.Constraints
 import androidx.work.OneTimeWorkRequestBuilder
@@ -34,6 +37,7 @@ import com.stash.core.data.sync.workers.TrackInfoEnrichmentWorker
 import com.stash.core.data.sync.workers.UpdateCheckWorker
 import com.stash.core.data.sync.workers.constraintsForManualTrigger
 import com.stash.core.media.preview.LosslessUrlPrefetcher
+import com.stash.core.media.streaming.SquidCookieAutoRefresher
 import com.stash.data.download.lossless.LosslessRetryScheduler
 import com.stash.data.download.ytdlp.YtDlpUpdateWorker
 import dagger.hilt.android.HiltAndroidApp
@@ -122,6 +126,15 @@ class StashApplication : Application(), Configuration.Provider {
     lateinit var losslessRetryScheduler: LosslessRetryScheduler
 
     /**
+     * Auto-refresher for the squid.wtf captcha cookie. Activated by
+     * the ProcessLifecycle observer registered in [onCreate] — only
+     * runs when (1) Kennyy is unhealthy AND (2) the app is in the
+     * foreground/STARTED window. Idle no-op otherwise.
+     */
+    @Inject
+    lateinit var squidCookieAutoRefresher: SquidCookieAutoRefresher
+
+    /**
      * Writes uncaught exceptions to `cacheDir/crashes/` so the user can
      * later share the latest report from Settings → Diagnostics. Installed
      * as the first thing after super.onCreate() so it catches errors from
@@ -156,6 +169,25 @@ class StashApplication : Application(), Configuration.Provider {
         // async startup work completes).
         SingletonImageLoader.setSafe { ctx -> CoilConfiguration.build(ctx, okHttpClient) }
         syncNotificationManager.createChannels()
+        // Squid cookie auto-refresher: start when the app moves to STARTED,
+        // stop when it moves to STOPPED. ProcessLifecycle is the right
+        // scope vs Activity-scoped because rotation/recreation shouldn't
+        // interrupt a refresh in progress. The refresher itself gates on
+        // KennyyHealthMonitor.isHealthy, so it stays idle when Kennyy is
+        // up. Registered here (before the applicationScope.launch blocks)
+        // so it's observing as early as possible; the first STARTED event
+        // doesn't fire until after onCreate completes anyway.
+        ProcessLifecycleOwner.get().lifecycle.addObserver(
+            object : DefaultLifecycleObserver {
+                override fun onStart(owner: LifecycleOwner) {
+                    squidCookieAutoRefresher.start()
+                }
+
+                override fun onStop(owner: LifecycleOwner) {
+                    squidCookieAutoRefresher.stop()
+                }
+            },
+        )
         applicationScope.launch {
             musicRepository.runMigrations()
         }

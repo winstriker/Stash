@@ -35,13 +35,31 @@ import kotlinx.coroutines.launch
  * is the only module that can see all three types.
  */
 @Singleton
-class SquidCookieAutoRefresher @Inject constructor(
+class SquidCookieAutoRefresher(
     private val solver: HeadlessSquidCaptchaSolver,
     private val healthMonitor: KennyyHealthMonitor,
     private val prefs: LosslessSourcePreferences,
-    private val scope: CoroutineScope =
-        CoroutineScope(SupervisorJob() + Dispatchers.Main),
+    private val scope: CoroutineScope,
 ) {
+    /**
+     * Hilt-injectable constructor. Dagger does NOT honour Kotlin default
+     * parameter values on `@Inject` constructors (it sees the parameter
+     * as a required binding regardless), so the production scope is
+     * constructed explicitly here. Tests use the four-arg primary
+     * constructor to pass a `TestScope` directly.
+     */
+    @Inject
+    constructor(
+        solver: HeadlessSquidCaptchaSolver,
+        healthMonitor: KennyyHealthMonitor,
+        prefs: LosslessSourcePreferences,
+    ) : this(
+        solver = solver,
+        healthMonitor = healthMonitor,
+        prefs = prefs,
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
+    )
+
     private var job: Job? = null
     private var consecutiveFailures: Int = 0
 
