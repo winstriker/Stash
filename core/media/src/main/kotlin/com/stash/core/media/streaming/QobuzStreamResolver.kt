@@ -1,5 +1,6 @@
 package com.stash.core.media.streaming
 
+import android.util.Log
 import com.stash.core.data.db.entity.TrackEntity
 import com.stash.data.download.lossless.TrackQuery
 import com.stash.data.download.lossless.qobuz.QobuzSource
@@ -30,7 +31,11 @@ class QobuzStreamResolver @Inject constructor(
     private val source: QobuzSource,
 ) {
     suspend fun resolve(track: TrackEntity): StreamUrl? {
-        if (!source.isEnabledForStreaming()) return null
+        Log.d(TAG, "resolve attempt id=${track.id} title='${track.title}'")
+        if (!source.isEnabledForStreaming()) {
+            Log.d(TAG, "disabled id=${track.id} (no cookie or stale)")
+            return null
+        }
 
         val query = TrackQuery(
             artist = track.artist,
@@ -39,8 +44,18 @@ class QobuzStreamResolver @Inject constructor(
             isrc = track.isrc?.takeIf { it.isNotBlank() },
             durationMs = track.durationMs,
         )
-        val result = source.resolveImmediate(query) ?: return null
-        val etspMs = parseEtspMs(result.downloadUrl) ?: return null
+        val result = source.resolveImmediate(query) ?: run {
+            Log.d(TAG, "no_result id=${track.id}")
+            return null
+        }
+        val etspMs = parseEtspMs(result.downloadUrl) ?: run {
+            Log.w(TAG, "no_etsp id=${track.id}")
+            return null
+        }
+        Log.d(
+            TAG,
+            "resolved id=${track.id} origin=$ORIGIN expiresInSec=${(etspMs - System.currentTimeMillis()) / 1000}",
+        )
         return StreamUrl(
             url = result.downloadUrl,
             expiresAtMs = etspMs,
@@ -60,6 +75,7 @@ class QobuzStreamResolver @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "QobuzStreamResolver"
         const val ORIGIN = "squid"
         val ETSP_REGEX = Regex("""[?&]etsp=(\d+)""")
     }

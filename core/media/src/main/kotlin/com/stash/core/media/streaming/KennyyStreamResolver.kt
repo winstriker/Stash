@@ -1,5 +1,6 @@
 package com.stash.core.media.streaming
 
+import android.util.Log
 import com.stash.core.data.db.entity.TrackEntity
 import com.stash.data.download.lossless.TrackQuery
 import com.stash.data.download.lossless.kennyy.KennyySource
@@ -83,6 +84,7 @@ class KennyyStreamResolver @Inject constructor(
     private val source: KennyySource,
 ) {
     suspend fun resolve(track: TrackEntity): StreamUrl? {
+        Log.d(TAG, "resolve attempt id=${track.id} title='${track.title}'")
         val query = TrackQuery(
             artist = track.artist,
             title = track.title,
@@ -94,8 +96,18 @@ class KennyyStreamResolver @Inject constructor(
         // is user-initiated and must not queue behind background
         // AvailabilityCheckWorker batches that hold the limiter at 1
         // req/s. See KennyySource.resolveImmediate KDoc for rationale.
-        val result = source.resolveImmediate(query) ?: return null
-        val etspMs = parseEtspMs(result.downloadUrl) ?: return null
+        val result = source.resolveImmediate(query) ?: run {
+            Log.d(TAG, "no_result id=${track.id}")
+            return null
+        }
+        val etspMs = parseEtspMs(result.downloadUrl) ?: run {
+            Log.w(TAG, "no_etsp id=${track.id}")
+            return null
+        }
+        Log.d(
+            TAG,
+            "resolved id=${track.id} origin=$ORIGIN expiresInSec=${(etspMs - System.currentTimeMillis()) / 1000}",
+        )
         return StreamUrl(
             url = result.downloadUrl,
             expiresAtMs = etspMs,
@@ -115,6 +127,7 @@ class KennyyStreamResolver @Inject constructor(
     }
 
     private companion object {
+        const val TAG = "KennyyStreamResolver"
         const val ORIGIN = "kennyy"
         val ETSP_REGEX = Regex("""[?&]etsp=(\d+)""")
     }
