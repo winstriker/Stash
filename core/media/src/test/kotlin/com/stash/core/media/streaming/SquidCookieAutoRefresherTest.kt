@@ -1,7 +1,7 @@
 package com.stash.core.media.streaming
 
 import com.stash.data.download.lossless.LosslessSourcePreferences
-import com.stash.data.download.lossless.squid.HeadlessSquidCaptchaSolver
+import com.stash.data.download.lossless.squid.NativeSquidCaptchaSolver
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -17,7 +17,7 @@ class SquidCookieAutoRefresherTest {
 
     @Test
     fun doesNotRefresh_whenKennyyHealthy() = runTest {
-        val solver: HeadlessSquidCaptchaSolver = mockk(relaxed = true)
+        val solver: NativeSquidCaptchaSolver = mockk(relaxed = true)
         val prefs: LosslessSourcePreferences = mockk(relaxed = true) {
             coEvery { captchaCookieSetAtMs } returns flowOf(System.currentTimeMillis() - 30 * 60_000L)
         }
@@ -28,14 +28,14 @@ class SquidCookieAutoRefresherTest {
         advanceTimeBy(60_000L)
         runCurrent()
 
-        coVerify(exactly = 0) { solver.solve(any()) }
+        coVerify(exactly = 0) { solver.solve() }
         refresher.stop()
     }
 
     @Test
     fun refreshesImmediately_whenKennyyUnhealthyAndCookieStale() = runTest {
-        val solver: HeadlessSquidCaptchaSolver = mockk(relaxed = true) {
-            coEvery { solve(any()) } returns "new-cookie-value"
+        val solver: NativeSquidCaptchaSolver = mockk(relaxed = true) {
+            coEvery { solve() } returns "new-cookie-value"
         }
         val prefs: LosslessSourcePreferences = mockk(relaxed = true) {
             coEvery { captchaCookieSetAtMs } returns flowOf(0L)  // never set
@@ -47,7 +47,7 @@ class SquidCookieAutoRefresherTest {
         refresher.start()
         runCurrent()
 
-        coVerify(exactly = 1) { solver.solve(any()) }
+        coVerify(exactly = 1) { solver.solve() }
         coVerify(exactly = 1) { prefs.setCaptchaCookieValue("new-cookie-value") }
         refresher.stop()
     }

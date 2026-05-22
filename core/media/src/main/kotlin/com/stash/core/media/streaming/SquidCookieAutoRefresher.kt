@@ -2,7 +2,7 @@ package com.stash.core.media.streaming
 
 import android.util.Log
 import com.stash.data.download.lossless.LosslessSourcePreferences
-import com.stash.data.download.lossless.squid.HeadlessSquidCaptchaSolver
+import com.stash.data.download.lossless.squid.NativeSquidCaptchaSolver
 import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.CoroutineScope
@@ -30,13 +30,13 @@ import kotlinx.coroutines.launch
  *
  * Placement note: lives in :core:media (not :data:download) because
  * it depends on KennyyHealthMonitor (own module) AND
- * LosslessSourcePreferences + HeadlessSquidCaptchaSolver (:data:download).
+ * LosslessSourcePreferences + NativeSquidCaptchaSolver (:data:download).
  * The module graph is :core:media -> :data:download (one-way), so this
  * is the only module that can see all three types.
  */
 @Singleton
 class SquidCookieAutoRefresher(
-    private val solver: HeadlessSquidCaptchaSolver,
+    private val solver: NativeSquidCaptchaSolver,
     private val healthMonitor: KennyyHealthMonitor,
     private val prefs: LosslessSourcePreferences,
     private val scope: CoroutineScope,
@@ -50,7 +50,7 @@ class SquidCookieAutoRefresher(
      */
     @Inject
     constructor(
-        solver: HeadlessSquidCaptchaSolver,
+        solver: NativeSquidCaptchaSolver,
         healthMonitor: KennyyHealthMonitor,
         prefs: LosslessSourcePreferences,
     ) : this(
