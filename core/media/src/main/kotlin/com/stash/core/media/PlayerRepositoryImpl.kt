@@ -630,8 +630,12 @@ class PlayerRepositoryImpl @Inject constructor(
     override suspend fun addNext(track: Track) {
         val controller = ensureController() ?: return
         val wasEmpty = controller.mediaItemCount == 0
+        val streamingOn = streamingPreference.current()
+        // Single-track resolve — no parallelism needed, semaphore size 1.
+        val semaphore = Semaphore(1)
+        val mediaItem = resolveTrackToMediaItem(track, semaphore, streamingOn) ?: return
         val insertIndex = controller.currentMediaItemIndex + 1
-        controller.addMediaItem(insertIndex, track.toQueueMediaItem())
+        controller.addMediaItem(insertIndex, mediaItem)
         // If the queue was empty, the user tapped "Play next" with nothing
         // playing — they expect the song to actually start, not just sit
         // silently in a queue they can't see. Prepare and play.
@@ -644,7 +648,11 @@ class PlayerRepositoryImpl @Inject constructor(
     override suspend fun addToQueue(track: Track) {
         val controller = ensureController() ?: return
         val wasEmpty = controller.mediaItemCount == 0
-        controller.addMediaItem(track.toQueueMediaItem())
+        val streamingOn = streamingPreference.current()
+        // Single-track resolve — no parallelism needed, semaphore size 1.
+        val semaphore = Semaphore(1)
+        val mediaItem = resolveTrackToMediaItem(track, semaphore, streamingOn) ?: return
+        controller.addMediaItem(mediaItem)
         if (wasEmpty) {
             controller.prepare()
             controller.play()
@@ -655,65 +663,25 @@ class PlayerRepositoryImpl @Inject constructor(
         if (tracks.isEmpty()) return
         val controller = ensureController() ?: return
         val wasEmpty = controller.mediaItemCount == 0
-        Log.d(TAG, "addToQueue(batch) start: ${tracks.size} tracks, controller.mediaItemCount=${controller.mediaItemCount}")
-        controller.addMediaItems(tracks.map { it.toQueueMediaItem() })
+        val streamingOn = streamingPreference.current()
+        val semaphore = Semaphore(STREAM_RESOLVE_PARALLELISM)
+        val beforeCount = controller.mediaItemCount
+        Log.d(TAG, "addToQueue(batch) start: ${tracks.size} tracks, controller.mediaItemCount=$beforeCount")
+        // Parallel-resolve; preserve input order so the user's queue matches
+        // the order they tapped Add-to-Queue.
+        val resolved = coroutineScope {
+            tracks.map { track ->
+                async { resolveTrackToMediaItem(track, semaphore, streamingOn) }
+            }.awaitAll()
+        }.filterNotNull()
+        Log.d(TAG, "addToQueue(batch) resolved ${resolved.size}/${tracks.size} tracks")
+        if (resolved.isEmpty()) return
+        controller.addMediaItems(resolved)
         Log.d(TAG, "addToQueue(batch) after addMediaItems: controller.mediaItemCount=${controller.mediaItemCount}")
         if (wasEmpty) {
             controller.prepare()
             controller.play()
         }
-    }
-
-    /**
-     * Picks the right MediaItem flavour for queue insertion. Downloaded
-     * tracks present on disk get the eager [toMediaItem] (file:// URI, no
-     * network). Everything else falls back to [toLazyMediaItem] so queue
-     * display can grow instantly while [StashPlaybackService.resolveMediaItem]
-     * resolves the real http(s) URL just-in-time.
-     */
-    private fun Track.toQueueMediaItem(): MediaItem {
-        val localPath = filePath
-        val downloaded = isDownloaded && !localPath.isNullOrBlank() && filePathExistsOnDisk(localPath)
-        return if (downloaded) toMediaItem() else toLazyMediaItem()
-    }
-
-    /**
-     * Build a MediaItem for a streaming-only track WITHOUT pre-resolving its
-     * URL. The placeholder URI [LAZY_SCHEME]://<youtubeId> is detected by
-     * [StashPlaybackService.resolveMediaItem] which calls [streamResolver]
-     * just-in-time. This decouples queue display (immediate) from URL
-     * resolution (slow / partial), so an Add to Queue tap grows the queue
-     * instantly even if some tracks ultimately fail to resolve.
-     *
-     * Downloaded tracks still go through [toMediaItem] (with file:// URI)
-     * since local files don't need resolution.
-     *
-     * Extras carry the inputs StreamSourceRegistry.resolve needs:
-     * youtubeId (for YT path), artist/title/album/durationMs (for Qobuz
-     * search), and isrc when available (best Qobuz match signal).
-     */
-    private fun Track.toLazyMediaItem(): MediaItem {
-        val placeholder = "$LAZY_SCHEME://${youtubeId ?: id}".toUri()
-        val metadata = MediaMetadata.Builder()
-            .setTitle(title)
-            .setArtist(artist)
-            .setAlbumTitle(album)
-            .setArtworkUri((albumArtPath ?: albumArtUrl)?.toUri())
-            .setExtras(Bundle().apply {
-                putLong(EXTRA_TRACK_ID, id)
-                youtubeId?.let { putString(EXTRA_LAZY_YOUTUBE_ID, it) }
-                putString(EXTRA_LAZY_ARTIST, artist)
-                putString(EXTRA_LAZY_TITLE, title)
-                putString(EXTRA_LAZY_ALBUM, album)
-                putLong(EXTRA_LAZY_DURATION_MS, durationMs)
-                isrc?.let { putString(EXTRA_LAZY_ISRC, it) }
-            })
-            .build()
-        return MediaItem.Builder()
-            .setMediaId(id.toString())
-            .setUri(placeholder)
-            .setMediaMetadata(metadata)
-            .build()
     }
 
     override suspend fun toggleShuffle() {
@@ -1242,22 +1210,6 @@ class PlayerRepositoryImpl @Inject constructor(
 
         /** Refresh prefetch if cached URL has less than this margin remaining. */
         private const val PREFETCH_FRESH_THRESHOLD_MS = 60_000L
-
-        // --- Lazy-resolution markers ---
-        // Placeholder URI scheme used by Track.toLazyMediaItem for streaming
-        // tracks whose URL we haven't resolved yet. StashPlaybackService.resolveMediaItem
-        // detects this scheme and resolves to a real http(s) URI just before
-        // ExoPlayer needs to play the item.
-        const val LAZY_SCHEME = "stash-lazy"
-        // Extras carry everything StreamSourceRegistry.resolve needs to look up
-        // the track. videoId is the YT canonical reference; artist/title/album/
-        // durationMs reproduce KennyySource.TrackQuery.
-        const val EXTRA_LAZY_YOUTUBE_ID = "stash.lazy.youtubeId"
-        const val EXTRA_LAZY_ARTIST = "stash.lazy.artist"
-        const val EXTRA_LAZY_TITLE = "stash.lazy.title"
-        const val EXTRA_LAZY_ALBUM = "stash.lazy.album"
-        const val EXTRA_LAZY_DURATION_MS = "stash.lazy.durationMs"
-        const val EXTRA_LAZY_ISRC = "stash.lazy.isrc"
     }
 
     /**

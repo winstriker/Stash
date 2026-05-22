@@ -66,7 +66,6 @@ class StashPlaybackService : MediaLibraryService() {
     @Inject lateinit var playlistDao: PlaylistDao
     @Inject lateinit var stashLikedRepository: StashLikedPlaylistRepository
     @Inject lateinit var prefetchOrchestrator: PrefetchOrchestrator
-    @Inject lateinit var streamResolver: com.stash.core.media.streaming.StreamSourceRegistry
 
     companion object {
         /** Custom command action for toggling shuffle mode. */
@@ -441,15 +440,8 @@ class StashPlaybackService : MediaLibraryService() {
         }
 
         private suspend fun resolveMediaItem(item: MediaItem): MediaItem {
-            // 0. Lazy-resolve streaming items added to queue without pre-resolution.
-            //    See PlayerRepositoryImpl.toLazyMediaItem.
-            val uri = item.localConfiguration?.uri
-            if (uri != null && uri.scheme == "stash-lazy") {
-                return resolveLazyItem(item)
-            }
-
             // 1. If it's already a fully resolved item (has URI), use it
-            if (uri != null) {
+            if (item.localConfiguration?.uri != null) {
                 return item
             }
 
@@ -481,77 +473,15 @@ class StashPlaybackService : MediaLibraryService() {
             }
 
             // 3. Fallback to request metadata URI (with security check)
-            val reqUri = item.requestMetadata.mediaUri
-            if (reqUri != null) {
-                val scheme = reqUri.scheme
+            val uri = item.requestMetadata.mediaUri
+            if (uri != null) {
+                val scheme = uri.scheme
                 if (scheme == "file" || scheme == "android.resource" || scheme == "content") {
-                    return item.buildUpon().setUri(reqUri).build()
+                    return item.buildUpon().setUri(uri).build()
                 }
             }
 
             return item
-        }
-
-        /**
-         * Resolve a lazy-scheme placeholder MediaItem to a real http(s) URI
-         * via [streamResolver]. Called by [resolveMediaItem] when the item's
-         * URI scheme is `stash-lazy`. On failure leaves the placeholder URI
-         * intact — ExoPlayer will surface a PlaybackException which
-         * [com.stash.core.media.PlayerRepositoryImpl.playerListener] feeds
-         * to [com.stash.core.media.StreamErrorCascadeGuard].
-         */
-        private suspend fun resolveLazyItem(item: MediaItem): MediaItem {
-            val extras = item.mediaMetadata.extras
-            if (extras == null) {
-                android.util.Log.w("StashPlayback", "lazy item missing extras; cannot resolve")
-                return item
-            }
-            val youtubeId = extras.getString("stash.lazy.youtubeId")
-            val artist = extras.getString("stash.lazy.artist") ?: ""
-            val title = extras.getString("stash.lazy.title") ?: ""
-            val album = extras.getString("stash.lazy.album") ?: ""
-            val durationMs = extras.getLong("stash.lazy.durationMs", 0L)
-            val isrc = extras.getString("stash.lazy.isrc")
-            val trackId = extras.getLong(EXTRA_TRACK_ID, 0L)
-
-            // Construct a synthetic TrackEntity for the resolver. Mirrors
-            // PlayerRepositoryImpl.toEntity() — only the fields the resolver
-            // chain reads need to be populated.
-            val entity = TrackEntity(
-                id = trackId,
-                title = title,
-                artist = artist,
-                album = album,
-                durationMs = durationMs,
-                filePath = null,
-                isDownloaded = false,
-                isStreamable = true,
-                albumArtUrl = item.mediaMetadata.artworkUri?.toString(),
-                albumArtPath = null,
-                isrc = isrc,
-                youtubeId = youtubeId,
-            )
-
-            android.util.Log.d(
-                "StashPlayback",
-                "lazy resolve: '$title' by '$artist' (yt=$youtubeId)",
-            )
-            val stream = streamResolver.resolve(entity, allowYouTube = true)
-            if (stream == null) {
-                android.util.Log.w(
-                    "StashPlayback",
-                    "lazy resolve FAILED: '$title' — leaving placeholder URI; player will error",
-                )
-                return item
-            }
-
-            android.util.Log.d(
-                "StashPlayback",
-                "lazy resolve OK: '$title' origin=${stream.origin}",
-            )
-            return item.buildUpon()
-                .setUri(android.net.Uri.parse(stream.url))
-                .build()
         }
 
         @OptIn(UnstableApi::class)
