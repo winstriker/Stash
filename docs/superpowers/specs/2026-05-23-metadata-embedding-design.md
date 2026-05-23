@@ -27,7 +27,7 @@ The fix is bounded: `MetadataEmbedder` already supports artwork via ffmpeg `-dis
 ## Non-goals
 
 - **No customisable filename patterns.** Issue #76 also asks for `%ARTIST%-%TITLE%` style output naming. Different UX surface (Settings + rename engine), independent of tag embedding, and the existing `FileOrganizer.slugify` path works correctly. Filed as a separate follow-up issue, not in this spec.
-- **No track-number / disc-number / release-year tags.** The `Track` model has TITLE / ARTIST / ALBUM / ISRC / ALBUM_ART_URL but **no** `trackNumber` / `discNumber` / `releaseYear` / `albumArtist`. Adding them requires Spotify-sync changes, DB migration, and matcher updates that materially expand scope. ALBUMARTIST falls back to ARTIST in this spec. Track ordering in Plex/Foobar falls back to filename sort, which is good enough for the v0.9.35 fix. Filed as a separate follow-up.
+- **No track-number / disc-number / release-year tags.** The `Track` domain model has TITLE / ARTIST / ALBUM / ISRC / ALBUM_ART_URL but **no** `trackNumber` / `discNumber` / `releaseYear` exposed through the model and mapper. Adding them requires Spotify-sync changes, DB migration, and matcher updates that materially expand scope. ALBUMARTIST is the exception: `TrackEntity.albumArtist` (column `album_artist`, defaultValue `""`) was added in v0.9.26 to power Library album grouping, but it never surfaced through `core/model/Track.kt` or `TrackMapper`. This spec **does** thread it through (§1.2) and prefers it when non-blank, falling back to `track.artist` only when the column is empty. Track ordering in Plex/Foobar falls back to filename sort, which is good enough for the v0.9.35 fix. Filed as a separate follow-up.
 - **No GENRE / COMPOSER / COMMENT / ENCODER tags.** Same reason: data isn't reliably available in the Track row.
 - **No re-mux of containers.** ffmpeg `-c copy` is container-agnostic and mux-only. We do not transcode and we do not change the container. Opus stays Opus; M4A stays M4A; FLAC stays FLAC.
 - **No "fix metadata" button per track.** Backfill is automatic and library-wide. A user with a single bad row can wait for backfill or re-download.
@@ -58,7 +58,7 @@ Location: `core/data/src/main/kotlin/com/stash/core/data/db/entity/TrackEntity.k
 val metadataEmbeddedAt: Long? = null,
 ```
 
-Migration: bumps the Room schema version (current is v22 per find-in-flac spec, so this is v23). `ALTER TABLE tracks ADD COLUMN metadata_embedded_at INTEGER`.
+Migration: bumps the Room schema version. The current schema is **v26** (confirmed by `core/data/schemas/com.stash.core.data.db.StashDatabase/26.json` and `version = 26` in `StashDatabase.kt`). This spec adds Migration **v26 → v27**: a single `ALTER TABLE tracks ADD COLUMN metadata_embedded_at INTEGER`.
 
 #### 1.2 Track domain model
 
@@ -68,7 +68,19 @@ Mirror the column on `core/model/Track.kt`:
 val metadataEmbeddedAt: Long? = null,
 ```
 
-Update `TrackMapper` (both directions).
+Also expose the existing `albumArtist` column (already on `TrackEntity` since v0.9.26, but never surfaced through the domain layer):
+
+```kotlin
+/**
+ * Album-level artist for grouping multi-artist releases in Plex / Foobar.
+ * Distinct from [artist] (the track-level credit) — e.g. a feature credit
+ * may say `artist = "Drake, 21 Savage"` while `albumArtist = "Drake"`.
+ * Empty string when unknown; embedding code falls back to [artist].
+ */
+val albumArtist: String = "",
+```
+
+Update `TrackMapper` in both directions (`TrackEntity.toDomain()` and `Track.toEntity()`) to propagate `albumArtist` and `metadataEmbeddedAt`. The mapper change is mechanical but mandatory — without it the new tag-writing code reads a stale empty string.
 
 #### 1.3 New DAO methods on `TrackDao`
 
@@ -120,7 +132,7 @@ Location: `data/download/src/main/kotlin/com/stash/data/download/files/AlbumArtC
 @Singleton
 class AlbumArtCache @Inject constructor(
     private val fileOrganizer: FileOrganizer,
-    @Named("shared") private val httpClient: OkHttpClient,
+    private val httpClient: OkHttpClient,
 ) {
     /**
      * Returns a local JPEG file for the album's cover, downloading and
@@ -149,7 +161,7 @@ URL canonicalisation: Spotify CDN URLs (`https://i.scdn.co/image/<hash>`) and YT
 
 #### 2.3 Hilt module
 
-Bind in `DownloadModule`. No new DI graph node — reuses `@Named("shared") OkHttpClient` already provided for Last.fm / catalog calls.
+Bind in `DownloadModule`. No new DI graph node — reuses the unqualified `OkHttpClient` singleton provided by `core/network/.../NetworkModule.kt` (the same instance every other consumer in the data layer injects).
 
 ### 3. MetadataEmbedder changes
 
@@ -160,22 +172,20 @@ Bind in `DownloadModule`. No new DI graph node — reuses `@Named("shared") OkHt
 Inside the `args = buildList { ... }` block, after the existing `title=`/`artist=`/`album=` writes, add (when source values are non-blank):
 
 ```kotlin
-add("-metadata"); add("album_artist=${sanitize(track.artist)}")
+val effectiveAlbumArtist = track.albumArtist.ifBlank { track.artist }
+add("-metadata"); add("ALBUMARTIST=${sanitize(effectiveAlbumArtist)}")
+add("-metadata"); add("album_artist=${sanitize(effectiveAlbumArtist)}")  // legacy lowercase alias
 track.isrc?.takeIf { it.isNotBlank() }?.let {
-    add("-metadata"); add("isrc=${sanitize(it)}")
+    add("-metadata"); add("ISRC=${sanitize(it)}")
 }
-add("-metadata"); add("encoder=Stash $appVersion")
+add("-metadata"); add("ENCODER=Stash ${BuildConfig.VERSION_NAME}")
 ```
 
-ffmpeg maps the `album_artist` metadata key to:
-- FLAC: `ALBUMARTIST` Vorbis comment
-- Opus/Ogg: `ALBUMARTIST` Vorbis comment in `OpusTags` block
-- M4A: `aART` atom
-- MP3: TPE2 ID3v2 frame
+**Vorbis-comment casing.** Vorbis-comment readers (FLAC, Opus, Ogg) are conventionally case-insensitive but **some real-world readers — Symfonium, several car head units — only match the canonical uppercase form** (`ALBUMARTIST`, `ISRC`, `ENCODER`). ffmpeg passes the key string through verbatim for Vorbis comments. We write each key twice — uppercase canonical form and a lowercase legacy alias (`album_artist`) — so both ID3-style readers (which match the lowercase form by convention) and strict Vorbis readers see the value. This duplication adds <100 bytes per file and removes a class of "tag invisible in one player but visible in another" support reports.
 
-So the same call produces correct Plex-readable tags in every container.
+For M4A and MP3 containers, ffmpeg normalises both forms to the single canonical atom/frame (`aART` / `TPE2`); the duplicate write is a no-op.
 
-`encoder` is included to make it easy to identify Stash-tagged files in a mixed library — useful for support diagnostics.
+`ENCODER=Stash <version>` makes it easy to identify Stash-tagged files in a mixed library. The version string is read from `BuildConfig.VERSION_NAME` — the `:data:download` module already exposes BuildConfig via its `buildFeatures { buildConfig = true }` setting in `build.gradle.kts`.
 
 #### 3.2 Always-on callers
 
@@ -245,17 +255,18 @@ class MetadataBackfillWorker @AssistedInject constructor(
         val total = trackDao.observeTracksNeedingEmbedCount().first()
         backfillState.markStarted(total)
 
-        var offset = 0
         var processed = 0
         while (true) {
-            val batch = trackDao.getTracksNeedingEmbed(BATCH_SIZE, offset)
+            // OFFSET stays 0 every batch — processed rows leave the result
+            // set via the metadata_embedded_at stamp (success OR 0L failure
+            // sentinel). See §5.3.
+            val batch = trackDao.getTracksNeedingEmbed(BATCH_SIZE, offset = 0)
             if (batch.isEmpty()) break
             for (entity in batch) {
                 processEntity(entity)
                 processed++
                 backfillState.publishProgress(processed, total)
             }
-            offset += batch.size  // no, see §5.3 — offset stays 0
         }
 
         backfillState.markFinished()
@@ -264,9 +275,21 @@ class MetadataBackfillWorker @AssistedInject constructor(
 
     private suspend fun processEntity(entity: TrackEntity) {
         val track = entity.toDomain()
-        val file = track.filePath?.let(::File) ?: return markFailed(track.id)
+        val pathString = track.filePath ?: return markFailed(track.id)
+
+        // SAF check must precede the File() construction, because a
+        // SAF row's filePath is a `content://...` URI string and
+        // `File("content://...").exists()` always returns false —
+        // wrapping it in File would collapse SAF rows indistinguishably
+        // into the "file missing" branch and break the safSkipped
+        // counter that the Home banner reads (§6.4).
+        if (pathString.startsWith("content://")) {
+            backfillState.incrementSafSkipped()
+            return markFailed(track.id)
+        }
+
+        val file = File(pathString)
         if (!file.exists()) return markFailed(track.id)
-        if (file.path.startsWith("content://")) return markFailed(track.id)  // SAF — out of scope, see §6.4
 
         val art = runCatching { albumArtCache.resolveArt(track) }.getOrNull()
         val embedded = runCatching { metadataEmbedder.embedMetadata(file, track, art) }.isSuccess
@@ -293,34 +316,40 @@ class MetadataBackfillWorker @AssistedInject constructor(
 - No `requiresCharging` — backfill is CPU-light (ffmpeg `-c copy` is just mux, no transcode). On a Pixel 7 a 5-minute 16-bit FLAC re-muxes in ~150ms.
 - `setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)` — try expedited first so progress is visible, fall back if quota exhausted.
 
-#### 5.3 Pagination caveat
+#### 5.3 Pagination
 
-The query above filters `WHERE metadata_embedded_at IS NULL`. When the worker processes a row and updates the column, the row drops out of the result set. So `OFFSET` would skip rows: after processing 50 rows, the next 50 unprocessed rows are at offset 0, not 50. The worker keeps `offset = 0` between batches; only when a batch returns rows but **none** of them get marked (all failed → `metadata_embedded_at = 0L`) does offset need to advance past those failures. Simpler: every batch is `LIMIT 50 OFFSET 0`, and the loop terminates when `batch.isEmpty()`. The 0L sentinel handles non-recoverable rows so they don't re-enter the queue.
+Every batch query is `LIMIT 50 OFFSET 0`. As each row is processed, the worker stamps `metadata_embedded_at` either to `System.currentTimeMillis()` (success) or to `0L` (irrecoverable failure: file missing, SAF row, ffmpeg threw). Either value removes the row from the `WHERE metadata_embedded_at IS NULL` filter, so the next batch query naturally returns the next 50 unprocessed rows. The loop terminates when the batch comes back empty.
+
+This avoids the offset bookkeeping a standard paginator would need, and guarantees no row is ever processed twice. Strip out the placeholder `offset += batch.size` line in the §5.1 sketch — it was leftover from a draft and is unused.
 
 #### 5.4 `MetadataBackfillState`
 
 Location: `data/download/src/main/kotlin/com/stash/data/download/backfill/MetadataBackfillState.kt`
 
-DataStore-backed observable state for the Home banner:
+Preferences DataStore-backed observable state for the Home banner, mirroring the file/key conventions of `LosslessSourcePreferences` (DataStore<Preferences>, top-level `Context.dataStore` extension defined alongside the class):
 
 ```kotlin
 data class BackfillSnapshot(
     val state: State,           // IDLE, RUNNING, FINISHED
     val processed: Int,
     val total: Int,
+    val safSkipped: Int,        // SAF/content:// rows skipped — see §6.4
     val finishedAt: Long?,
 )
 
 @Singleton
-class MetadataBackfillState @Inject constructor(...) {
+class MetadataBackfillState @Inject constructor(
+    @ApplicationContext private val context: Context,
+) {
     val snapshot: Flow<BackfillSnapshot>
     suspend fun markStarted(total: Int)
     suspend fun publishProgress(processed: Int, total: Int)
+    suspend fun incrementSafSkipped()
     suspend fun markFinished()
 }
 ```
 
-Mirrors the shape of `LosslessRetryState` (introduced in v0.9.32) so the Home banner reduce-step is straightforward.
+Keys are scalar ints/longs in a private `Preferences` DataStore named `metadata_backfill_state` (file `metadata_backfill_state.preferences_pb`). The reactive `snapshot` is built by combining the four preference keys via `data.map { ... }`.
 
 #### 5.5 Trigger: `MetadataBackfillScheduler`
 
@@ -350,7 +379,7 @@ class MetadataBackfillScheduler @Inject constructor(
 }
 ```
 
-`BackfillVersionTracker` stores the highest version that has enqueued backfill in a DataStore key (`backfill_enqueued_for_version`). The current binary's version is read from `BuildConfig.VERSION_CODE`. Re-runs only happen when the version increments — a clean upgrade path for future tagging fixes.
+`BackfillVersionTracker` stores the highest version that has enqueued backfill in a Preferences-DataStore key (`backfill_enqueued_for_version`, int). The DataStore file is `metadata_backfill_state.preferences_pb` (same file as `MetadataBackfillState`, separate key). The current binary's version is read from `BuildConfig.VERSION_CODE` exposed by the `:data:download` module. Re-runs only happen when the stored value < current version — a clean upgrade path for future tagging fixes.
 
 ### 6. Home banner
 
@@ -358,16 +387,17 @@ class MetadataBackfillScheduler @Inject constructor(
 
 Location: `feature/home/src/main/kotlin/com/stash/feature/home/HomeViewModel.kt`
 
-Add `MetadataBackfillState.snapshot` to the existing state combine. Add a new `HomeBannerState` variant:
+Add `MetadataBackfillState.snapshot` to the existing state combine. Add a new `HomeBannerState` variant alongside the existing ones (`NoSpotifyAuth`, `WaitingForLossless`, `LosslessSweepRunning`, etc. — see `HomeBannerState.kt` in the home feature for the current sealed hierarchy):
 
 ```kotlin
 data class RetaggingLibrary(
     val processed: Int,
     val total: Int,
+    val safSkipped: Int,
 ) : HomeBannerState
 ```
 
-Priority below "no Spotify auth" and "lossless sweep" — i.e. shown only when nothing more urgent is pending. Dismisses itself when `processed == total` (worker stamps `markFinished`, state transitions to FINISHED, banner hides after a 2-second "Done" pulse).
+Priority ordering in the `reduce` function: shown only when no `NoSpotifyAuth` / `WaitingForLossless` / `LosslessSweepRunning` banner is active. Concretely: append `RetaggingLibrary` to the bottom of the existing `when`/`firstNotNullOf` priority chain. Dismisses itself when `processed == total` (worker calls `markFinished`, state transitions to FINISHED, banner hides after a 2-second "Done" pulse rendered by a `LaunchedEffect` in the home composable).
 
 #### 6.2 Copy
 
