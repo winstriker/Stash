@@ -184,6 +184,7 @@ class LocalImportCoordinator @Inject constructor(
                 youtubeId = null,
                 albumArtPath = albumArtPath,
                 isDownloaded = true,
+                metadataEmbeddedAt = System.currentTimeMillis(),
             ),
         )
     }
