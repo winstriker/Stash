@@ -1,6 +1,7 @@
 package com.stash.data.download.files
 
 import android.content.Context
+import com.stash.core.common.AppVersionProvider
 import com.stash.core.model.Track
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -10,33 +11,27 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Embeds metadata (title, artist, album) into audio files using ffmpeg.
+ * Embeds metadata (TITLE, ARTIST, ALBUMARTIST, ALBUM, ISRC, ENCODER)
+ * and optional cover art into audio files using ffmpeg. Container-
+ * agnostic — `-c copy` muxes the new metadata + picture stream into
+ * the original codec without re-encoding.
  *
- * The ffmpeg binary is bundled by the youtubedl-android library as a native .so.
- * If tagging fails for any reason, the original untagged file is preserved —
- * an untagged download is preferable to a missing one.
+ * The ffmpeg binary is bundled by youtubedl-android as a native .so.
+ * If tagging fails for any reason, the original untagged file is
+ * preserved — an untagged download is preferable to a missing one.
+ *
+ * Vorbis-comment casing: writes each key twice (canonical
+ * `ALBUMARTIST` + legacy `album_artist`) so both strict Vorbis
+ * readers (Symfonium, some car head units) and ID3-style readers
+ * (Plex, Foobar) see the value. ffmpeg normalises both forms to a
+ * single atom/frame for M4A and MP3 containers, so the duplicate
+ * is a no-op there.
  */
 @Singleton
 class MetadataEmbedder @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val fileOrganizer: FileOrganizer,
+    private val appVersion: AppVersionProvider,
 ) {
-    /**
-     * Strips control characters (0x00-0x1F) from metadata values to prevent
-     * ffmpeg command injection via crafted track names.
-     */
-    private fun sanitize(value: String): String = value.replace(Regex("[\\x00-\\x1f]"), "")
-
-    /**
-     * Embeds metadata (title, artist, album, track number) into an audio file
-     * using ffmpeg via the native .so bundled by youtubedl-android.
-     * Also embeds album art if available.
-     *
-     * @param audioFile    The downloaded audio file to tag.
-     * @param track        Track metadata to embed.
-     * @param albumArtFile Optional album art JPEG to attach as cover art.
-     * @return The tagged audio file (same path as [audioFile]).
-     */
     suspend fun embedMetadata(
         audioFile: File,
         track: Track,
@@ -47,68 +42,81 @@ class MetadataEmbedder @Inject constructor(
             "${audioFile.nameWithoutExtension}_tagged.${audioFile.extension}",
         )
 
-        val args = buildList {
-            add("-i")
-            add(audioFile.absolutePath)
-
-            if (albumArtFile != null && albumArtFile.exists()) {
-                add("-i")
-                add(albumArtFile.absolutePath)
-                add("-map")
-                add("0:a")
-                add("-map")
-                add("1:0")
-                add("-disposition:v:0")
-                add("attached_pic")
-            }
-
-            add("-metadata")
-            add("title=${sanitize(track.title)}")
-            add("-metadata")
-            add("artist=${sanitize(track.artist)}")
-            if (track.album.isNotEmpty()) {
-                add("-metadata")
-                add("album=${sanitize(track.album)}")
-            }
-            add("-c")
-            add("copy")
-            add("-y")
-            add(outputFile.absolutePath)
-        }
+        val args = buildFfmpegArgs(audioFile, outputFile, track, albumArtFile, appVersion)
 
         try {
-            // youtubedl-android (JunkFood02 fork) bundles ffmpeg as a native .so
-            val ffmpegPath = resolveFfmpegBinary()
-            if (ffmpegPath != null) {
-                val process = ProcessBuilder(listOf(ffmpegPath.absolutePath) + args)
-                    .redirectErrorStream(true)
-                    .start()
-                process.waitFor()
+            val ffmpegPath = resolveFfmpegBinary() ?: return@withContext audioFile
+            val process = ProcessBuilder(listOf(ffmpegPath.absolutePath) + args)
+                .redirectErrorStream(true)
+                .start()
+            process.waitFor()
 
-                if (outputFile.exists() && outputFile.length() > 0) {
-                    audioFile.delete()
-                    outputFile.renameTo(audioFile)
-                }
+            if (outputFile.exists() && outputFile.length() > 0) {
+                audioFile.delete()
+                outputFile.renameTo(audioFile)
             }
         } catch (_: Exception) {
-            // If tagging fails, keep the untagged file — better than no file
             outputFile.delete()
         }
 
         audioFile
     }
 
-    /**
-     * Resolves the ffmpeg binary path from the native library directory.
-     * The JunkFood02 fork may bundle it as `libffmpeg.so` or `libffmpeg.zip.so`.
-     *
-     * @return The ffmpeg [File] if found, null otherwise.
-     */
     private fun resolveFfmpegBinary(): File? {
         val nativeDir = context.applicationInfo.nativeLibraryDir
         val candidates = listOf("libffmpeg.so", "libffmpeg.zip.so")
-        return candidates
-            .map { File(nativeDir, it) }
-            .firstOrNull { it.exists() }
+        return candidates.map { File(nativeDir, it) }.firstOrNull { it.exists() }
+    }
+
+    companion object {
+        private fun sanitize(value: String): String =
+            value.replace(Regex("[\\x00-\\x1f]"), "")
+
+        /**
+         * Pure helper — builds the ffmpeg argv list for the embed
+         * pass. Extracted so unit tests can exercise the tag-writing
+         * logic without spawning a process. Internal `companion`
+         * visibility intentional: only the embedder + its tests
+         * need this.
+         */
+        internal fun buildFfmpegArgs(
+            audioFile: File,
+            outputFile: File,
+            track: Track,
+            albumArtFile: File?,
+            appVersion: AppVersionProvider,
+        ): List<String> = buildList {
+            add("-i"); add(audioFile.absolutePath)
+
+            if (albumArtFile != null && albumArtFile.exists()) {
+                add("-i"); add(albumArtFile.absolutePath)
+                add("-map"); add("0:a")
+                add("-map"); add("1:0")
+                add("-disposition:v:0"); add("attached_pic")
+            }
+
+            add("-metadata"); add("title=${sanitize(track.title)}")
+            add("-metadata"); add("artist=${sanitize(track.artist)}")
+
+            if (track.album.isNotEmpty()) {
+                add("-metadata"); add("album=${sanitize(track.album)}")
+            }
+
+            val effectiveAlbumArtist = track.albumArtist.ifBlank { track.artist }
+            if (effectiveAlbumArtist.isNotEmpty()) {
+                add("-metadata"); add("ALBUMARTIST=${sanitize(effectiveAlbumArtist)}")
+                add("-metadata"); add("album_artist=${sanitize(effectiveAlbumArtist)}")
+            }
+
+            track.isrc?.takeIf { it.isNotBlank() }?.let {
+                add("-metadata"); add("ISRC=${sanitize(it)}")
+            }
+
+            add("-metadata"); add("ENCODER=Stash ${appVersion.versionName}")
+
+            add("-c"); add("copy")
+            add("-y")
+            add(outputFile.absolutePath)
+        }
     }
 }

@@ -10,6 +10,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.stash.core.data.prefs.QualityPreference
 import com.stash.core.model.QualityTier
+import com.stash.data.download.files.MetadataEmbedder
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -78,8 +79,14 @@ class QualityPreferencesManager @Inject constructor(
  *   - 250 = Opus ~70 kbps
  *   - 249 = Opus ~50 kbps
  *
- * `--embed-metadata` tells yt-dlp to write title/artist/album tags into
- * the file during download, eliminating a separate ffmpeg metadata pass.
+ * `--embed-metadata` tells yt-dlp to write whatever YouTube reports
+ * (uploader, video title, description) into the file as a fallback
+ * tag layer. As of v0.9.35 the primary tag write happens after the
+ * download via [MetadataEmbedder.embedMetadata], which overwrites
+ * the noisy YouTube-derived tags with Stash's clean
+ * TITLE/ARTIST/ALBUMARTIST/ALBUM/ISRC set plus embedded cover art.
+ * The yt-dlp flag stays as a safety net — if our ffmpeg pass fails
+ * for any reason, the file still has yt-dlp's tags rather than none.
  */
 fun QualityTier.toYtDlpArgs(): List<String> = when (this) {
     // Experimental: try true 256 first, fall to perceptually-equivalent
