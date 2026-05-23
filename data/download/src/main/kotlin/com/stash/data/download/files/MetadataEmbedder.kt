@@ -48,7 +48,11 @@ class MetadataEmbedder @Inject constructor(
         try {
             val ffmpegPath = resolveFfmpegBinary() ?: return@withContext audioFile
             val pb = ProcessBuilder(listOf(ffmpegPath.absolutePath) + args)
-                .redirectErrorStream(true)
+            // Keep stderr separate from stdout so we can log it verbatim on
+            // failure — merging via redirectErrorStream(true) and then never
+            // reading the stream is what hid the Opus `attached_pic` exit-234
+            // failure during integration test development. Mirrors the pattern
+            // in FFmpegBridgeImpl.measureLoudness.
             // Android's dynamic linker does NOT auto-search the executable's
             // directory for sibling .so files. The bundled ffmpeg needs
             // libc++_shared.so and the libav*.so siblings that youtubedl-android
@@ -58,10 +62,22 @@ class MetadataEmbedder @Inject constructor(
             // Mirrors FFmpegBridgeImpl.ldLibraryPath().
             pb.environment()["LD_LIBRARY_PATH"] = ldLibraryPath()
             val process = pb.start()
+
+            // Drain both streams to prevent the process from blocking on
+            // full pipe buffers — ffmpeg can be chatty on stderr even on
+            // success (progress, stream mapping summary).
+            val stdout = process.inputStream.bufferedReader().use { it.readText() }
+            val stderr = process.errorStream.bufferedReader().use { it.readText() }
             val exit = process.waitFor()
 
             if (exit != 0) {
-                Log.w(TAG, "ffmpeg exited with code $exit for ${audioFile.absolutePath}")
+                Log.w(TAG, "ffmpeg exited $exit for ${audioFile.absolutePath} (args: ${args.take(8)}...)")
+                if (stderr.isNotBlank()) {
+                    Log.w(TAG, "ffmpeg stderr: ${stderr.take(500)}")
+                }
+                if (stdout.isNotBlank()) {
+                    Log.d(TAG, "ffmpeg stdout: ${stdout.take(200)}")
+                }
             }
 
             if (outputFile.exists() && outputFile.length() > 0) {
