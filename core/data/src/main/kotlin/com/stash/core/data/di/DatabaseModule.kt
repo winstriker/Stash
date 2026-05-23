@@ -112,4 +112,8 @@ object DatabaseModule {
     @Provides
     fun provideTrackSkipEventDao(db: StashDatabase): com.stash.core.data.db.dao.TrackSkipEventDao =
         db.trackSkipEventDao()
+
+    @Provides
+    fun provideLyricsDao(db: StashDatabase): com.stash.core.data.db.dao.LyricsDao =
+        db.lyricsDao()
 }
