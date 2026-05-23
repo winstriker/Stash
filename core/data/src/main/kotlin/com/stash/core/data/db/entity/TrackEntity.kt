@@ -287,4 +287,20 @@ data class TrackEntity(
      */
     @ColumnInfo(name = "is_streamable_checked_at")
     val isStreamableCheckedAt: Long? = null,
+
+    /**
+     * v0.9.35: epoch-millis of the most recent successful tag + art
+     * embedding pass on the file at [filePath]. NULL = never tagged
+     * (legacy v0.9.34 rows + any pre-v0.9.35 download). 0L = backfill
+     * tried and gave up irrecoverably (file missing on disk, ffmpeg
+     * error, SAF row we can't operate on in place). Non-null non-zero
+     * = the on-disk file carries the v0.9.35 tag set.
+     *
+     * The backfill worker queries `WHERE is_downloaded = 1 AND
+     * file_path IS NOT NULL AND metadata_embedded_at IS NULL`. Both
+     * success and failure stamps remove the row from the result set
+     * so the worker terminates.
+     */
+    @ColumnInfo(name = "metadata_embedded_at")
+    val metadataEmbeddedAt: Long? = null,
 )

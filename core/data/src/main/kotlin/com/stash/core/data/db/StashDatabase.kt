@@ -70,7 +70,7 @@ import com.stash.core.data.db.entity.TrackTagEntity
         TrackBlocklistEntity::class,
         TrackSkipEventEntity::class,
     ],
-    version = 26,
+    version = 27,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -714,6 +714,21 @@ abstract class StashDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE tracks ADD COLUMN is_streamable INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE tracks ADD COLUMN is_streamable_checked_at INTEGER")
+            }
+        }
+
+        /**
+         * v26 → v27 (v0.9.35): per-track `metadata_embedded_at` for the
+         * tag + art embedding backfill. Nullable INTEGER, no default —
+         * NULL is the "needs tagging" sentinel; a non-null non-zero
+         * value is the success stamp; 0L is the irrecoverable-failure
+         * stamp (file missing, ffmpeg error, SAF row). The
+         * MetadataBackfillWorker queries `metadata_embedded_at IS NULL`
+         * so both success and failure stamps terminate the work item.
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN metadata_embedded_at INTEGER")
             }
         }
     }

@@ -730,6 +730,55 @@ interface TrackDao {
     )
     suspend fun invalidateOldStreamableChecks(cutoff: Long): Int
 
+    // ── Metadata embedding backfill (v0.9.35) ───────────────────────────
+
+    /**
+     * Stamps a single row's `metadata_embedded_at` column. The
+     * [MetadataBackfillWorker] passes the current wall clock on success
+     * and `0L` on irrecoverable failure (file missing, ffmpeg error, SAF
+     * row we can't operate on in place). Both values remove the row
+     * from [getTracksNeedingEmbed]'s result set so the worker
+     * terminates.
+     */
+    @Query("UPDATE tracks SET metadata_embedded_at = :timestamp WHERE id = :trackId")
+    suspend fun setMetadataEmbeddedAt(trackId: Long, timestamp: Long)
+
+    /**
+     * Paginated scan of downloaded tracks whose on-disk file has never
+     * had the v0.9.35 tag-set written. Drives the
+     * [MetadataBackfillWorker]'s resumable batch loop — pass `(limit,
+     * offset)` and stamp each returned row so the next call advances
+     * past it. `file_path IS NOT NULL` excludes streaming-only rows
+     * (nothing to tag).
+     */
+    @Query(
+        """
+        SELECT * FROM tracks
+        WHERE is_downloaded = 1
+          AND file_path IS NOT NULL
+          AND metadata_embedded_at IS NULL
+        ORDER BY id ASC
+        LIMIT :limit OFFSET :offset
+        """
+    )
+    suspend fun getTracksNeedingEmbed(limit: Int, offset: Int): List<TrackEntity>
+
+    /**
+     * Reactive count of rows still awaiting an embed pass. Subscribed
+     * by the Home banner's `MetadataBackfillBannerState` so the
+     * "Tagging N files…" affordance counts down as the worker drains
+     * the backlog and disappears when the count hits zero.
+     */
+    @Query(
+        """
+        SELECT COUNT(*) FROM tracks
+        WHERE is_downloaded = 1
+          AND file_path IS NOT NULL
+          AND metadata_embedded_at IS NULL
+        """
+    )
+    fun observeTracksNeedingEmbedCount(): Flow<Int>
+
     // ── Release-downloads worker (Off→On "release space" path) ──────────
 
     /**
