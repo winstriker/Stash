@@ -4,6 +4,7 @@ import android.util.Log
 import com.stash.core.data.audio.AudioDurationExtractor
 import com.stash.core.data.audio.AudioMetadata
 import com.stash.core.model.Track
+import com.stash.data.download.files.AlbumArtCache
 import com.stash.data.download.files.FileOrganizer
 import com.stash.data.download.files.FileOrganizer.CommittedTrack
 import com.stash.data.download.files.MetadataEmbedder
@@ -39,6 +40,7 @@ class TrackFinalizer @Inject constructor(
     private val metadataEmbedder: MetadataEmbedder,
     private val fileOrganizer: FileOrganizer,
     private val audioExtractor: AudioDurationExtractor,
+    private val albumArtCache: AlbumArtCache,
 ) {
     /**
      * Embed metadata, commit to library, probe. Caller passes a [Track]
@@ -56,7 +58,10 @@ class TrackFinalizer @Inject constructor(
         embedMetadata: Boolean = true,
     ): FinalizeResult = runCatching {
         if (embedMetadata) {
-            runCatching { metadataEmbedder.embedMetadata(sourceFile, track) }
+            val art = runCatching { albumArtCache.resolveArt(track) }
+                .onFailure { e -> Log.w(TAG, "art resolve failed: ${e.message}") }
+                .getOrNull()
+            runCatching { metadataEmbedder.embedMetadata(sourceFile, track, art) }
                 .onFailure { e -> Log.w(TAG, "metadata embed failed: ${e.message}") }
         }
         val committed: CommittedTrack = fileOrganizer.commitDownload(
