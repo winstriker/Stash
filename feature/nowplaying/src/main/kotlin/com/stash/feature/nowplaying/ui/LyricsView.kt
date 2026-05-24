@@ -65,10 +65,18 @@ fun LyricsSyncedRenderer(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    val currentIndex by remember(lines) {
-        derivedStateOf {
-            lines.indexOfLast { it.timestampMs <= currentPositionMs }.coerceAtLeast(0)
-        }
+    // BUG FIX (post-T12): the previous version used `remember(lines) { derivedStateOf {
+    //   lines.indexOfLast { it.timestampMs <= currentPositionMs }.coerceAtLeast(0)
+    // } }`. derivedStateOf only re-runs when a snapshot-tracked read changes —
+    // currentPositionMs is a plain Long parameter, not a Compose State, so the
+    // lambda captured the value at first composition and never updated when the
+    // parent re-emitted a new position. Result: currentIndex stuck at whatever
+    // line was current at sheet-open time (usually 0), and the highlight didn't
+    // track playback. remember(lines, currentPositionMs) { … } recomputes on
+    // every position tick (~250ms) — cheap (single O(n) scan over the line list)
+    // and reactive without needing derivedStateOf.
+    val currentIndex = remember(lines, currentPositionMs) {
+        lines.indexOfLast { it.timestampMs <= currentPositionMs }.coerceAtLeast(0)
     }
 
     // User-drag guard: any time the user manually scrolls, freeze the
