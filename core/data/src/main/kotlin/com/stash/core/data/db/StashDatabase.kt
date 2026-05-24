@@ -10,6 +10,7 @@ import com.stash.core.data.db.dao.ArtistProfileCacheDao
 import com.stash.core.data.db.dao.DiscoveryQueueDao
 import com.stash.core.data.db.dao.DownloadQueueDao
 import com.stash.core.data.db.dao.ListeningEventDao
+import com.stash.core.data.db.dao.LyricsDao
 import com.stash.core.data.db.dao.PlaylistDao
 import com.stash.core.data.db.dao.RemoteSnapshotDao
 import com.stash.core.data.db.dao.SourceAccountDao
@@ -23,6 +24,7 @@ import com.stash.core.data.db.entity.ArtistProfileCacheEntity
 import com.stash.core.data.db.entity.DiscoveryQueueEntity
 import com.stash.core.data.db.entity.DownloadQueueEntity
 import com.stash.core.data.db.entity.ListeningEventEntity
+import com.stash.core.data.db.entity.LyricsEntity
 import com.stash.core.data.db.entity.PlaylistEntity
 import com.stash.core.data.db.entity.PlaylistTrackCrossRef
 import com.stash.core.data.db.entity.RemotePlaylistSnapshotEntity
@@ -69,8 +71,9 @@ import com.stash.core.data.db.entity.TrackTagEntity
         DiscoveryQueueEntity::class,
         TrackBlocklistEntity::class,
         TrackSkipEventEntity::class,
+        LyricsEntity::class,
     ],
-    version = 27,
+    version = 28,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -101,6 +104,8 @@ abstract class StashDatabase : RoomDatabase() {
     abstract fun trackBlocklistDao(): TrackBlocklistDao
 
     abstract fun trackSkipEventDao(): TrackSkipEventDao
+
+    abstract fun lyricsDao(): LyricsDao
 
 
     companion object {
@@ -729,6 +734,41 @@ abstract class StashDatabase : RoomDatabase() {
         val MIGRATION_26_27 = object : Migration(26, 27) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE tracks ADD COLUMN metadata_embedded_at INTEGER")
+            }
+        }
+
+        /**
+         * v27 → v28 (v0.9.36): per-track `lyrics_fetched_at` for the
+         * lyrics-fetch backfill (mirror of v0.9.35's
+         * `metadata_embedded_at` sentinel semantics) plus the new
+         * `lyrics` table that stores the fetched payload keyed by
+         * track id with FK cascade on delete.
+         *
+         * Sentinel semantics on `tracks.lyrics_fetched_at`: NULL =
+         * never tried; 0L = backfill tried and produced no hit
+         * (LRCLIB miss + YT-Music fallback miss); non-null non-zero =
+         * success epoch-millis (a `lyrics` row exists for this
+         * track). The `LyricsBackfillWorker` queries
+         * `WHERE lyrics_fetched_at IS NULL`, so both stamps remove
+         * the row from its result set and the worker terminates.
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE tracks ADD COLUMN lyrics_fetched_at INTEGER")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS lyrics (
+                      track_id INTEGER NOT NULL PRIMARY KEY,
+                      plain_text TEXT,
+                      synced_lrc TEXT,
+                      instrumental INTEGER NOT NULL DEFAULT 0,
+                      language TEXT,
+                      source TEXT NOT NULL,
+                      source_lyrics_id TEXT,
+                      fetched_at INTEGER NOT NULL,
+                      FOREIGN KEY(track_id) REFERENCES tracks(id) ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_lyrics_track_id ON lyrics(track_id)")
             }
         }
     }

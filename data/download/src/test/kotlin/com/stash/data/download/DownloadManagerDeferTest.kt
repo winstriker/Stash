@@ -8,6 +8,7 @@ import com.stash.core.model.Track
 import com.stash.data.download.files.AlbumArtCache
 import com.stash.data.download.files.FileOrganizer
 import com.stash.data.download.files.MetadataEmbedder
+import com.stash.data.download.lyrics.LyricsFetchTrigger
 import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
 import com.stash.data.download.lossless.LosslessUrlDownloader
@@ -59,6 +60,7 @@ class DownloadManagerDeferTest {
     private val loudnessMeasurer: com.stash.core.data.audio.LoudnessMeasurer = mockk(relaxed = true)
     private val metadataEmbedder: MetadataEmbedder = mockk(relaxed = true)
     private val albumArtCache: AlbumArtCache = mockk(relaxed = true)
+    private val lyricsFetchTrigger: LyricsFetchTrigger = mockk(relaxed = true)
 
     private fun newSubject(): DownloadManager = DownloadManager(
         downloadExecutor = downloadExecutor,
@@ -80,6 +82,7 @@ class DownloadManagerDeferTest {
         loudnessMeasurer = loudnessMeasurer,
         metadataEmbedder = metadataEmbedder,
         albumArtCache = albumArtCache,
+        lyricsFetchTrigger = lyricsFetchTrigger,
     )
 
     private fun stubTrack(): Track = Track(

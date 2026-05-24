@@ -16,6 +16,7 @@ import com.stash.core.model.TrackItem
 import com.stash.data.download.DownloadExecutor
 import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
+import com.stash.data.download.lyrics.LyricsFetchTrigger
 import com.stash.data.download.shared.TrackFinalizer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -56,6 +57,7 @@ class SearchDownloadCoordinatorDeferTest {
     private val losslessPrefs: LosslessSourcePreferences = mockk(relaxed = true)
     private val downloadQueueDao: DownloadQueueDao = mockk(relaxed = true)
     private val loudnessMeasurer: com.stash.core.data.audio.LoudnessMeasurer = mockk(relaxed = true)
+    private val lyricsFetchTrigger: LyricsFetchTrigger = mockk(relaxed = true)
 
     private fun newSubject(): SearchDownloadCoordinator = SearchDownloadCoordinator(
         registry = registry,
@@ -71,6 +73,7 @@ class SearchDownloadCoordinatorDeferTest {
         losslessPrefs = losslessPrefs,
         downloadQueueDao = downloadQueueDao,
         loudnessMeasurer = loudnessMeasurer,
+        lyricsFetchTrigger = lyricsFetchTrigger,
     )
 
     private fun stubTrack(): TrackItem = TrackItem(

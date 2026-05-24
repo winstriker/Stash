@@ -51,7 +51,7 @@ class MetadataBackfillScheduler @Inject constructor(
     private val versionTracker: BackfillVersionTracker,
 ) {
     suspend fun scheduleIfNeeded() {
-        if (!versionTracker.shouldRunForCurrentVersion()) return
+        if (!versionTracker.shouldRunForCurrentVersion(METADATA_BACKFILL_KEY)) return
         WorkManager.getInstance(context).enqueueUniqueWork(
             MetadataBackfillWorker.UNIQUE_WORK_NAME,
             ExistingWorkPolicy.KEEP,
@@ -64,6 +64,18 @@ class MetadataBackfillScheduler @Inject constructor(
                 .setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
                 .build(),
         )
-        versionTracker.markEnqueuedForCurrentVersion()
+        versionTracker.markEnqueuedForCurrentVersion(METADATA_BACKFILL_KEY)
+    }
+
+    private companion object {
+        /**
+         * Stable preference-key string for the metadata-embedding backfill.
+         *
+         * MUST remain `"backfill_enqueued_for_version"` — this is the exact
+         * key v0.9.35 wrote when it first shipped. Renaming it would cause
+         * every existing user who already ran the metadata backfill to
+         * re-trigger it on first launch of v0.9.36.
+         */
+        const val METADATA_BACKFILL_KEY = "backfill_enqueued_for_version"
     }
 }

@@ -11,6 +11,7 @@ import com.stash.core.model.Track
 import com.stash.data.download.files.AlbumArtCache
 import com.stash.data.download.files.FileOrganizer
 import com.stash.data.download.files.MetadataEmbedder
+import com.stash.data.download.lyrics.LyricsFetchTrigger
 import com.stash.data.download.shared.TrackFinalizer
 import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
@@ -89,6 +90,14 @@ class DownloadManager @Inject constructor(
     private val loudnessMeasurer: com.stash.core.data.audio.LoudnessMeasurer,
     private val metadataEmbedder: MetadataEmbedder,
     private val albumArtCache: AlbumArtCache,
+    /**
+     * v0.9.36: enqueue a [com.stash.data.lyrics.worker.LyricsFetchWorker]
+     * immediately after a successful download stamps
+     * `metadata_embedded_at`. The interface lives in `:data:download`
+     * (this module) and the production binding in `:app` so
+     * `:data:download` stays free of a cyclic `:data:lyrics` dependency.
+     */
+    private val lyricsFetchTrigger: LyricsFetchTrigger,
 ) {
     /** Limits concurrent downloads. 8 parallel slots — with native opus (no FFmpeg
      *  transcode) downloads are almost entirely network-bound so more parallelism helps. */
@@ -287,6 +296,10 @@ class DownloadManager @Inject constructor(
         Log.i(TAG, "Downloaded: ${effectiveTrack.artist} - ${effectiveTrack.title} → ${committed.filePath}")
         runCatching { trackDao.setMetadataEmbeddedAt(track.id, System.currentTimeMillis()) }
             .onFailure { Log.w(TAG, "setMetadataEmbeddedAt failed for ${track.id}: ${it.message}") }
+        // v0.9.36 lyrics integration: fire the post-download lyrics fetch
+        // on the same success boundary as the metadata stamp so any track
+        // that survives to a stamped state also gets a lyrics-fetch attempt.
+        lyricsFetchTrigger.enqueueFor(track.id)
         emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
         return TrackDownloadResult.Success(committed.filePath)
     }
@@ -428,6 +441,10 @@ class DownloadManager @Inject constructor(
 
                 runCatching { trackDao.setMetadataEmbeddedAt(track.id, System.currentTimeMillis()) }
                     .onFailure { Log.w(TAG, "setMetadataEmbeddedAt failed for ${track.id}: ${it.message}") }
+                // v0.9.36 lyrics integration: mirrors the yt-dlp branch in
+                // executeDownload — enqueue lyrics on the same success
+                // boundary as the metadata stamp.
+                lyricsFetchTrigger.enqueueFor(track.id)
                 emitProgress(track.id, 1f, DownloadStatus.COMPLETED)
                 return TrackDownloadResult.Success(finalized.committed.filePath)
             }

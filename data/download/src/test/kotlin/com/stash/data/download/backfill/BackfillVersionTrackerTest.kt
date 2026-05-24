@@ -61,23 +61,50 @@ class BackfillVersionTrackerTest {
 
     @Test
     fun `runs for current version when never run`() = runTest {
-        assertTrue(subject.shouldRunForCurrentVersion())
+        assertTrue(subject.shouldRunForCurrentVersion(METADATA_KEY))
     }
 
     @Test
     fun `markEnqueued then shouldRun returns false at same version`() = runTest {
-        subject.markEnqueuedForCurrentVersion()
-        assertFalse(subject.shouldRunForCurrentVersion())
+        subject.markEnqueuedForCurrentVersion(METADATA_KEY)
+        assertFalse(subject.shouldRunForCurrentVersion(METADATA_KEY))
     }
 
     @Test
     fun `bumping version re-arms the tracker`() = runTest {
-        subject.markEnqueuedForCurrentVersion()
+        subject.markEnqueuedForCurrentVersion(METADATA_KEY)
         val newerProvider = object : AppVersionProvider {
             override val versionName: String = "0.9.36"
             override val versionCode: Int = 72
         }
         val subject2 = BackfillVersionTracker(context, newerProvider)
-        assertTrue(subject2.shouldRunForCurrentVersion())
+        assertTrue(subject2.shouldRunForCurrentVersion(METADATA_KEY))
+    }
+
+    @Test
+    fun `two distinct keys do not interfere`() = runTest {
+        val tracker = BackfillVersionTracker(context, fakeAppVersion(versionCode = 100))
+
+        // Mark metadata enqueued for current version
+        tracker.markEnqueuedForCurrentVersion("backfill_enqueued_for_version")
+        assertFalse(tracker.shouldRunForCurrentVersion("backfill_enqueued_for_version"))
+
+        // Lyrics key should still report should-run
+        assertTrue(tracker.shouldRunForCurrentVersion("lyrics_backfill_enqueued_for_version"))
+
+        // Mark lyrics; metadata stays marked
+        tracker.markEnqueuedForCurrentVersion("lyrics_backfill_enqueued_for_version")
+        assertFalse(tracker.shouldRunForCurrentVersion("backfill_enqueued_for_version"))
+        assertFalse(tracker.shouldRunForCurrentVersion("lyrics_backfill_enqueued_for_version"))
+    }
+
+    private fun fakeAppVersion(versionCode: Int): AppVersionProvider =
+        object : AppVersionProvider {
+            override val versionName: String = "fake"
+            override val versionCode: Int = versionCode
+        }
+
+    private companion object {
+        const val METADATA_KEY = "backfill_enqueued_for_version"
     }
 }

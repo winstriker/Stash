@@ -18,6 +18,7 @@ import com.stash.data.download.DownloadResult
 import com.stash.data.download.files.FileOrganizer.CommittedTrack
 import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
+import com.stash.data.download.lyrics.LyricsFetchTrigger
 import com.stash.data.download.shared.TrackFinalizer
 import io.mockk.coEvery
 import io.mockk.coVerify
@@ -60,6 +61,7 @@ class SearchDownloadCoordinatorEmbedStampTest {
     private val losslessPrefs: LosslessSourcePreferences = mockk(relaxed = true)
     private val downloadQueueDao: DownloadQueueDao = mockk(relaxed = true)
     private val loudnessMeasurer: com.stash.core.data.audio.LoudnessMeasurer = mockk(relaxed = true)
+    private val lyricsFetchTrigger: LyricsFetchTrigger = mockk(relaxed = true)
 
     private val tmpCacheDir: File = File(
         System.getProperty("java.io.tmpdir"),
@@ -80,6 +82,7 @@ class SearchDownloadCoordinatorEmbedStampTest {
         losslessPrefs = losslessPrefs,
         downloadQueueDao = downloadQueueDao,
         loudnessMeasurer = loudnessMeasurer,
+        lyricsFetchTrigger = lyricsFetchTrigger,
     )
 
     @Before

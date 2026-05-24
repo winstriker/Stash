@@ -72,8 +72,8 @@ android {
         applicationId = "com.stash.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 71
-        versionName = "0.9.35"
+        versionCode = 73
+        versionName = "0.9.36"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // AppAuth redirect scheme removed -- Spotify now uses sp_dc cookie auth
         // Last.fm API credentials exposed via BuildConfig for the app-level
@@ -178,6 +178,9 @@ dependencies {
     // data:ytmusic provides AlbumSummary, used by SearchScreen/ArtistProfileScreen
     // callback signatures that StashNavHost wires up for Album Discovery.
     implementation(project(":data:ytmusic"))
+    // data:lyrics exposes LyricsBackfillScheduler for the v0.9.36 once-per-version
+    // auto-enqueue path wired in StashApplication.onCreate.
+    implementation(project(":data:lyrics"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)

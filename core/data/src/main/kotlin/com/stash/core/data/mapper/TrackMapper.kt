@@ -42,6 +42,7 @@ fun TrackEntity.toDomain(): Track = Track(
     isStreamable = isStreamable,
     isStreamableCheckedAt = isStreamableCheckedAt,
     metadataEmbeddedAt = metadataEmbeddedAt,
+    lyricsFetchedAt = lyricsFetchedAt,
 )
 
 /**
@@ -81,4 +82,5 @@ fun Track.toEntity(): TrackEntity = TrackEntity(
     isStreamable = isStreamable,
     isStreamableCheckedAt = isStreamableCheckedAt,
     metadataEmbeddedAt = metadataEmbeddedAt,
+    lyricsFetchedAt = lyricsFetchedAt,
 )

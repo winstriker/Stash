@@ -303,4 +303,18 @@ data class TrackEntity(
      */
     @ColumnInfo(name = "metadata_embedded_at")
     val metadataEmbeddedAt: Long? = null,
+
+    /**
+     * v0.9.36: epoch-millis of the most recent lyrics-fetch attempt
+     * that produced a result. NULL = never tried (legacy rows + any
+     * pre-v0.9.36 download). 0L = backfill tried and found no
+     * matching lyrics (LRCLIB miss + YT Music fallback miss). Non-null
+     * non-zero = success epoch-millis; a `lyrics` row exists for this
+     * track. Mirror of `metadata_embedded_at`'s tristate sentinel
+     * semantics from v0.9.35: both success and failure stamps remove
+     * the row from the backfill worker's `lyrics_fetched_at IS NULL`
+     * predicate so the worker terminates.
+     */
+    @ColumnInfo(name = "lyrics_fetched_at")
+    val lyricsFetchedAt: Long? = null,
 )

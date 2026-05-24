@@ -779,6 +779,43 @@ interface TrackDao {
     )
     fun observeTracksNeedingEmbedCount(): Flow<Int>
 
+    // ── Lyrics fetch backfill (v0.9.36) ─────────────────────────────────
+
+    /**
+     * Stamps a single row's `lyrics_fetched_at` column. The
+     * `LyricsBackfillWorker` passes the current wall clock on
+     * success (paired with [LyricsDao.upsert]) and `0L` when both
+     * LRCLIB and the YT-Music fallback returned no usable lyrics.
+     * Both values remove the row from [getTracksNeedingLyrics]'s
+     * result set so the worker terminates. Mirror of
+     * [setMetadataEmbeddedAt] semantics from v0.9.35.
+     */
+    @Query("UPDATE tracks SET lyrics_fetched_at = :ts WHERE id = :trackId")
+    suspend fun setLyricsFetchedAt(trackId: Long, ts: Long)
+
+    /**
+     * Paginated scan of tracks whose lyrics fetch has never been
+     * attempted. Drives the `LyricsBackfillWorker`'s resumable batch
+     * loop. Ordered ASC on the primary key for a deterministic
+     * cursor.
+     *
+     * Note: unlike the metadata-embed query this does NOT require
+     * `is_downloaded = 1` — streamable-only tracks still benefit
+     * from sidecar lyrics so the bottom-sheet can display them.
+     */
+    @Query("SELECT * FROM tracks WHERE lyrics_fetched_at IS NULL ORDER BY id LIMIT :limit")
+    suspend fun getTracksNeedingLyrics(limit: Int): List<TrackEntity>
+
+    /**
+     * Reactive count of rows still awaiting a lyrics-fetch pass.
+     * Subscribed by the Home banner's `LyricsBackfillBannerState`
+     * so the "Fetching lyrics N…" affordance counts down as the
+     * worker drains the backlog and disappears when the count hits
+     * zero. Mirror of [observeTracksNeedingEmbedCount].
+     */
+    @Query("SELECT COUNT(*) FROM tracks WHERE lyrics_fetched_at IS NULL")
+    fun observeTracksNeedingLyricsCount(): Flow<Int>
+
     // ── Release-downloads worker (Off→On "release space" path) ──────────
 
     /**

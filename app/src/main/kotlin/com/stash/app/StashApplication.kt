@@ -26,6 +26,7 @@ import com.stash.core.data.repository.MusicRepositoryImpl
 import com.stash.core.data.sync.SyncNotificationManager
 import com.stash.data.download.backfill.MetadataBackfillScheduler
 import com.stash.data.download.ytdlp.YtDlpManager
+import com.stash.data.lyrics.backfill.LyricsBackfillScheduler
 import com.stash.core.data.sync.workers.ArtBackfillWorker
 import com.stash.core.data.sync.workers.AutoSaveScrobbler
 import com.stash.core.data.sync.workers.DiscoveryDownloadWorker
@@ -150,6 +151,15 @@ class StashApplication : Application(), Configuration.Provider {
      */
     @Inject
     lateinit var metadataBackfillScheduler: MetadataBackfillScheduler
+
+    /**
+     * v0.9.36: once-per-version auto-enqueue gate for `LyricsBackfillWorker`.
+     * Same idempotency contract as [metadataBackfillScheduler] — gated by a
+     * disjoint key on the shared `BackfillVersionTracker` so the two
+     * backfills fire independently on first launch after each upgrade.
+     */
+    @Inject
+    lateinit var lyricsBackfillScheduler: LyricsBackfillScheduler
 
     /** Application-scoped coroutine scope for one-shot startup tasks. */
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -312,9 +322,15 @@ class StashApplication : Application(), Configuration.Provider {
         applicationScope.launch { maybeHideEmptyYouTubePlaylists() }
         applicationScope.launch { maybeBackfillCodecsFromExtension() }
         applicationScope.launch { maybeBackfillTrackAlbums() }
-        // Auto-enqueue the v0.9.35 metadata backfill once per version.
-        // Idempotent: re-installing the same binary does not re-enqueue.
-        applicationScope.launch { metadataBackfillScheduler.scheduleIfNeeded() }
+        // Auto-enqueue the v0.9.35 metadata backfill once per version, plus
+        // the v0.9.36 lyrics backfill. Both are idempotent (re-installing
+        // the same binary does not re-enqueue) and gated by disjoint keys
+        // on the shared BackfillVersionTracker, so they fire independently
+        // on first launch after each upgrade.
+        applicationScope.launch {
+            metadataBackfillScheduler.scheduleIfNeeded()
+            lyricsBackfillScheduler.scheduleIfNeeded()
+        }
 
         // v0.9.30 Path A: AvailabilityCheckWorker + AvailabilityRecheckWorker
         // were removed when Library reverted to downloaded-only. They populated

@@ -18,6 +18,7 @@ import com.stash.data.download.lossless.LosslessSourcePreferences
 import com.stash.data.download.lossless.LosslessSourceRegistry
 import com.stash.data.download.lossless.SourceResult
 import com.stash.data.download.lossless.TrackQuery
+import com.stash.data.download.lyrics.LyricsFetchTrigger
 import com.stash.data.download.shared.TrackFinalizer
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CoroutineScope
@@ -78,6 +79,14 @@ class SearchDownloadCoordinator @Inject constructor(
     private val losslessPrefs: LosslessSourcePreferences,
     private val downloadQueueDao: DownloadQueueDao,
     private val loudnessMeasurer: com.stash.core.data.audio.LoudnessMeasurer,
+    /**
+     * v0.9.36: enqueue a [com.stash.data.lyrics.worker.LyricsFetchWorker]
+     * after a successful finalize on either branch. Interface lives in
+     * `:data:download` and the production binding in `:app`, mirroring
+     * the [com.stash.data.download.DownloadManager] hookup — see
+     * [LyricsFetchTrigger] for the cyclic-dep rationale.
+     */
+    private val lyricsFetchTrigger: LyricsFetchTrigger,
 ) {
     // App-lifetime scope. Class is @Singleton.
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -268,7 +277,11 @@ class SearchDownloadCoordinator @Inject constructor(
             }.onFailure { e ->
                 Log.e(TAG, "upsertSearchTrack failed for ${track.videoId}: ${e.message}", e)
             }
-            stampEmbeddedAt(track.videoId)
+            // v0.9.36 lyrics integration: chain the lyrics-fetch enqueue off
+            // the stamp's resolved trackId so we don't repeat findByYoutubeId.
+            // If the stamp lookup failed (returned null), skip lyrics too —
+            // we have no stable id to key the worker on.
+            stampEmbeddedAt(track.videoId)?.let { lyricsFetchTrigger.enqueueFor(it) }
         }
 
         // Free preview-cache space now that bytes are on permanent storage.
@@ -324,7 +337,8 @@ class SearchDownloadCoordinator @Inject constructor(
             }.onFailure { e ->
                 Log.e(TAG, "upsertSearchTrack (yt-dlp) failed for ${track.videoId}: ${e.message}", e)
             }
-            stampEmbeddedAt(track.videoId)
+            // v0.9.36 lyrics integration: parity with the lossless branch.
+            stampEmbeddedAt(track.videoId)?.let { lyricsFetchTrigger.enqueueFor(it) }
         }
         return finalized
     }
@@ -336,14 +350,21 @@ class SearchDownloadCoordinator @Inject constructor(
      * inserts before we get here, but defensive against a concurrent delete)
      * the stamp is simply skipped. Failure is non-fatal — the file is on
      * disk and playable regardless.
+     *
+     * v0.9.36: returns the resolved Long trackId so the caller can hand it
+     * straight to [LyricsFetchTrigger.enqueueFor] without repeating the
+     * `findByYoutubeId` lookup. Returns null when the row isn't found OR
+     * the DAO call threw — both cases mean we couldn't establish a stable
+     * trackId, so the lyrics enqueue must also be skipped.
      */
-    private suspend fun stampEmbeddedAt(videoId: String) {
-        runCatching {
-            val trackId = trackDao.findByYoutubeId(videoId)?.id ?: return
+    private suspend fun stampEmbeddedAt(videoId: String): Long? {
+        return runCatching {
+            val trackId = trackDao.findByYoutubeId(videoId)?.id ?: return null
             trackDao.setMetadataEmbeddedAt(trackId, System.currentTimeMillis())
+            trackId
         }.onFailure { e ->
             Log.w(TAG, "setMetadataEmbeddedAt failed for $videoId: ${e.message}")
-        }
+        }.getOrNull()
     }
 
     // -------------------------------------------------------------------------

@@ -97,4 +97,10 @@ data class Track(
      * = the file on disk carries the v0.9.35 tag set.
      */
     val metadataEmbeddedAt: Long? = null,
+    /**
+     * Epoch-millis of the most recent lyrics fetch attempt that produced a result.
+     * NULL = never tried; 0L = tried, none available; non-zero = success epoch-millis.
+     * Mirrors `tracks.lyrics_fetched_at` (v27 → v28 migration).
+     */
+    val lyricsFetchedAt: Long? = null,
 )

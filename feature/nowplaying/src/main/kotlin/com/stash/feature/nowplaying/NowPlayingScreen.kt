@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Wifi
+import androidx.compose.material.icons.outlined.Lyrics
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -68,6 +69,7 @@ import com.stash.core.model.isFlac
 import com.stash.core.ui.components.SaveToPlaylistSheet
 import com.stash.feature.nowplaying.ui.AmbientBackground
 import com.stash.feature.nowplaying.ui.GlowingProgressBar
+import com.stash.feature.nowplaying.ui.LyricsBottomSheet
 import com.stash.feature.nowplaying.ui.QueueBottomSheet
 
 /**
@@ -124,6 +126,23 @@ fun NowPlayingScreen(
             },
             onRemoveTrack = viewModel::onRemoveFromQueue,
             onMoveTrack = viewModel::onMoveInQueue,
+        )
+    }
+
+    // v0.9.36 Task 12 — lyrics bottom sheet. The IconButton that
+    // toggles this lives in Task 13; until then, no UI affordance
+    // triggers `onShowLyrics()`. The block below is the real wiring
+    // that Task 13 will hook into.
+    val showLyrics by viewModel.lyricsSheetOpen.collectAsStateWithLifecycle()
+    if (showLyrics) {
+        val lyricsState by viewModel.lyricsViewState.collectAsStateWithLifecycle()
+        val lyricsPositionMs by viewModel.currentPositionMs.collectAsStateWithLifecycle()
+        LyricsBottomSheet(
+            state = lyricsState,
+            currentPositionMs = lyricsPositionMs,
+            onSeek = viewModel::onLyricsLineSeek,
+            onRetry = viewModel::onLyricsRetry,
+            onDismiss = viewModel::onDismissLyrics,
         )
     }
 
@@ -237,11 +256,12 @@ fun NowPlayingScreen(
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            // -- Top bar: dismiss, label, flag, like, download, save, queue --
+            // -- Top bar: dismiss, label, flag, like, download, save, lyrics, queue --
             TopBar(
                 onDismiss = onDismiss,
                 onFlagWrongMatch = { showWrongMatchDialog = true },
                 onSaveClick = { showSaveSheet = true },
+                onLyricsClick = viewModel::onShowLyrics,
                 onQueueClick = { showQueue = true },
                 hasTrack = uiState.hasTrack,
                 queueSize = uiState.queueSize,
@@ -379,6 +399,7 @@ private fun TopBar(
     onDismiss: () -> Unit,
     onFlagWrongMatch: () -> Unit,
     onSaveClick: () -> Unit,
+    onLyricsClick: () -> Unit,
     onQueueClick: () -> Unit,
     hasTrack: Boolean,
     queueSize: Int,
@@ -453,6 +474,22 @@ private fun TopBar(
                 Icon(
                     imageVector = Icons.Default.BookmarkBorder,
                     contentDescription = "Save to Playlist",
+                    tint = Color.White,
+                    modifier = Modifier.size(24.dp),
+                )
+            }
+        }
+
+        // v0.9.36 Task 13 — Lyrics. Sits next to Queue because both
+        // surfaces are "playback context" — what's coming next, what
+        // the singer is saying right now. Hidden when no track is loaded
+        // (same gating as Save/Download/Like) so an empty Now Playing
+        // doesn't show a button that opens an empty sheet.
+        if (hasTrack) {
+            IconButton(onClick = onLyricsClick) {
+                Icon(
+                    imageVector = Icons.Outlined.Lyrics,
+                    contentDescription = "Lyrics",
                     tint = Color.White,
                     modifier = Modifier.size(24.dp),
                 )

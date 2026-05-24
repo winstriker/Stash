@@ -20,6 +20,10 @@ dependencies {
     // disk-truth Storage stats on the Home sync card (bypassing the
     // unreliable DB `file_size_bytes` SUM for legacy libraries).
     implementation(project(":data:download"))
+    // v0.9.36: LyricsBackfillState snapshot for the LyricsBackfillBanner
+    // on Home — mirrors the :data:download dependency for the v0.9.35
+    // metadata banner.
+    implementation(project(":data:lyrics"))
     implementation(libs.compose.material.icons.extended)
     implementation(libs.coil.compose)
     implementation(libs.coil.network.okhttp)

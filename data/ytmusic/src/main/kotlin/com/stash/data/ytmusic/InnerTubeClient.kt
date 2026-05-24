@@ -211,6 +211,28 @@ class InnerTubeClient @Inject constructor(
     }
 
     /**
+     * Calls the InnerTube `next` action.
+     *
+     * `next` is the "watch next" endpoint — given a videoId it returns the
+     * surfaces that flank the current playback (up-next queue, related,
+     * lyrics tab, etc.). For lyrics discovery, the response carries a
+     * `singleColumnMusicWatchNextResultsRenderer.tabbedRenderer.tabs[]`
+     * array; the tab whose endpoint points at `MPLY...` is the lyrics page,
+     * which can then be fetched via [browse].
+     *
+     * @param videoId The YouTube video ID.
+     * @return The parsed JSON response, or null on failure.
+     */
+    suspend fun next(videoId: String): JsonObject? = withContext(Dispatchers.IO) {
+        val variant = InnerTubeVariant.WEB_REMIX
+        val body = buildJsonObject {
+            put("context", buildContext(variant))
+            put("videoId", videoId)
+        }
+        executeRequest("$BASE_URL/next", body, null, variant)
+    }
+
+    /**
      * Calls the InnerTube `browse` action with a continuation token.
      *
      * Continuation requests fetch the next page of a previously-browsed surface

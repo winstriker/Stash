@@ -41,8 +41,8 @@ class FileOrganizer @Inject constructor(
      * own path inside [commitDownload].
      */
     fun getTrackDir(artist: String, album: String?): File {
-        val artistSlug = slugify(artist)
-        val albumSlug = if (!album.isNullOrBlank()) slugify(album) else "singles"
+        val artistSlug = FileOrganizerSlugs.slugify(artist)
+        val albumSlug = if (!album.isNullOrBlank()) FileOrganizerSlugs.slugify(album) else "singles"
         return File(musicDir, "$artistSlug/$albumSlug").also { it.mkdirs() }
     }
 
@@ -54,7 +54,7 @@ class FileOrganizer @Inject constructor(
      */
     fun getTrackFile(artist: String, album: String?, title: String, format: String = "opus"): File {
         val dir = getTrackDir(artist, album)
-        val titleSlug = slugify(title)
+        val titleSlug = FileOrganizerSlugs.slugify(title)
         return File(dir, "$titleSlug.$format")
     }
 
@@ -203,11 +203,11 @@ class FileOrganizer @Inject constructor(
     ): String {
         val root = DocumentFile.fromTreeUri(context, treeUri)
             ?: error("Could not open SAF tree; permission may have been revoked: $treeUri")
-        val artistSlug = slugify(artist)
-        val albumSlug = if (!album.isNullOrBlank()) slugify(album) else "singles"
+        val artistSlug = FileOrganizerSlugs.slugify(artist)
+        val albumSlug = if (!album.isNullOrBlank()) FileOrganizerSlugs.slugify(album) else "singles"
         val artistDir = root.findOrCreateDir(artistSlug)
         val albumDir = artistDir.findOrCreateDir(albumSlug)
-        val titleSlug = slugify(title)
+        val titleSlug = FileOrganizerSlugs.slugify(title)
         val filename = "$titleSlug.$format"
         // Overwrite: delete any existing file with the same name before creating.
         albumDir.findFile(filename)?.delete()
@@ -234,19 +234,6 @@ class FileOrganizer @Inject constructor(
         "wav" -> "audio/wav"
         else -> "audio/*"
     }
-
-    /**
-     * Converts a human-readable string into a filesystem-safe slug.
-     *
-     * Lowercases, strips non-alphanumeric characters (except spaces and hyphens),
-     * collapses whitespace into single hyphens, and truncates to 60 characters.
-     */
-    private fun slugify(input: String): String =
-        input.lowercase()
-            .replace(Regex("[^a-z0-9\\s-]"), "")
-            .replace(Regex("\\s+"), "-")
-            .trim('-')
-            .take(60)
 
     /**
      * Result of a successful [commitDownload]. `filePath` is either an
