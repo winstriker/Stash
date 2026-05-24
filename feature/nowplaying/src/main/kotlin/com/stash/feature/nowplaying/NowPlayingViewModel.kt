@@ -19,10 +19,13 @@ import com.stash.core.media.PlayerRepository
 import com.stash.core.model.UpgradeResult
 import com.stash.core.model.isFlac
 import com.stash.core.ui.components.PlaylistInfo
+import com.stash.core.model.Track
 import com.stash.data.lyrics.LyricsRepository
+import com.stash.data.lyrics.source.LyricsQuery
 import com.stash.data.lyrics.worker.LyricsFetchWorker
 import com.stash.feature.nowplaying.ui.LyricsViewState
 import com.stash.feature.nowplaying.ui.lyricsViewStateFor
+import com.stash.feature.nowplaying.ui.lyricsViewStateForResult
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -106,6 +109,16 @@ class NowPlayingViewModel @Inject constructor(
     val lyricsSheetOpen: StateFlow<Boolean> = _lyricsSheetOpen.asStateFlow()
 
     /**
+     * Transient lyrics state for streaming-mode tracks (id == 0L), which
+     * don't have a persistent `tracks` row to observe. Populated by
+     * [fetchStreamingLyrics] on sheet open; cleared (set to null) when
+     * the playing track changes so a stale render from the previous
+     * streamed song doesn't bleed through. Null = "not fetched yet";
+     * downstream [lyricsViewState] maps that to Loading.
+     */
+    private val _streamingLyricsState = MutableStateFlow<LyricsViewState?>(null)
+
+    /**
      * Re-derives [LyricsViewState] from the currently-playing track and
      * the observed [com.stash.core.data.db.entity.LyricsEntity] row.
      *
@@ -122,14 +135,20 @@ class NowPlayingViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     val lyricsViewState: StateFlow<LyricsViewState> = uiState
         .map { it.currentTrack }
-        .distinctUntilChanged { old, new -> old?.id == new?.id }
+        // Streaming-mode tracks all share id==0L; distinguish them by youtubeId so
+        // a track change between two streamed Yeat songs still flips the upstream.
+        .distinctUntilChanged { old, new -> trackKey(old) == trackKey(new) }
+        .onEach { _streamingLyricsState.value = null }   // reset transient state on track change
         .flatMapLatest { track ->
-            if (track == null) {
-                flowOf(LyricsViewState.None)
-            } else {
-                lyricsRepository.observe(track.id).map { row ->
+            when {
+                track == null -> flowOf(LyricsViewState.None)
+                track.id > 0L -> lyricsRepository.observe(track.id).map { row ->
                     lyricsViewStateFor(track, row)
                 }
+                // Streaming track (id == 0L). The transient flow is seeded by
+                // onShowLyrics -> fetchStreamingLyrics. Until then, null means
+                // we haven't tried — render Loading.
+                else -> _streamingLyricsState.map { it ?: LyricsViewState.Loading }
             }
         }
         .stateIn(
@@ -137,6 +156,18 @@ class NowPlayingViewModel @Inject constructor(
             started = SharingStarted.WhileSubscribed(5_000L),
             initialValue = LyricsViewState.Loading,
         )
+
+    /**
+     * Stable key for a Track regardless of whether it's library-resident
+     * (positive `id`) or streaming-only (`id == 0L`). Mirrors the
+     * convention already used at [observePlayerStateLive] for the
+     * optimistic-like-state map. Returns null only when [track] is null.
+     */
+    private fun trackKey(track: Track?): Long? = when {
+        track == null -> null
+        track.id > 0L -> track.id
+        else -> track.youtubeId.hashCode().toLong()
+    }
 
     /**
      * Polls [PlayerRepository.currentPosition] at the existing 250ms
@@ -501,8 +532,16 @@ class NowPlayingViewModel @Inject constructor(
     fun onShowLyrics() {
         _lyricsSheetOpen.value = true
         val track = _uiState.value.currentTrack ?: return
-        if (track.lyricsFetchedAt == null && track.id > 0L) {
-            enqueuePriorityFetch(track.id)
+        when {
+            // Library track with no fetch attempt yet — queue the worker, let
+            // the Room observation pick up the result.
+            track.id > 0L && track.lyricsFetchedAt == null -> enqueuePriorityFetch(track.id)
+            // Library track with prior attempt — Room observer already wired,
+            // nothing to do.
+            track.id > 0L -> Unit
+            // Streaming track (id == 0L) — no Room row to observe. Fetch via
+            // the source chain directly, render through the transient flow.
+            else -> fetchStreamingLyrics(track)
         }
     }
 
@@ -520,6 +559,31 @@ class NowPlayingViewModel @Inject constructor(
     fun onLyricsRetry() {
         val track = _uiState.value.currentTrack ?: return
         if (track.id > 0L) enqueuePriorityFetch(track.id)
+        else fetchStreamingLyrics(track)
+    }
+
+    /**
+     * Streaming-track lyrics path. Hits the source chain via
+     * [LyricsRepository.resolveTransient] (no Room write, no sidecar) and
+     * pushes the resulting [LyricsViewState] into [_streamingLyricsState].
+     * Re-entrant: calling on Retry resets to Loading then runs the chain
+     * fresh.
+     */
+    private fun fetchStreamingLyrics(track: Track) {
+        _streamingLyricsState.value = LyricsViewState.Loading
+        viewModelScope.launch {
+            val query = LyricsQuery(
+                trackId = 0L,                                    // unused in transient path
+                title = track.title,
+                artist = track.artist,
+                album = track.album.ifBlank { null },
+                albumArtist = track.albumArtist.ifBlank { null },
+                durationMs = track.durationMs.takeIf { it > 0 },
+                youtubeVideoId = track.youtubeId,
+            )
+            val result = runCatching { lyricsRepository.resolveTransient(query) }.getOrNull()
+            _streamingLyricsState.value = lyricsViewStateForResult(result)
+        }
     }
 
     /**

@@ -7,6 +7,7 @@ import com.stash.core.data.db.dao.TrackDao
 import com.stash.core.data.db.entity.LyricsEntity
 import com.stash.data.lyrics.sidecar.LyricsSidecarWriter
 import com.stash.data.lyrics.source.LyricsQuery
+import com.stash.data.lyrics.source.LyricsResult
 import com.stash.data.lyrics.source.LyricsSource
 import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
@@ -84,6 +85,22 @@ class LyricsRepository @Inject constructor(
         }
         return entity
     }
+
+    /**
+     * Transient source-chain walk for tracks that have no persistent
+     * `tracks` row to key against — typically streaming-mode playback
+     * where the audio is fetched by URL and never written to the
+     * library. Returns the first non-null [LyricsResult] without
+     * touching Room or the sidecar writer; caller renders the result
+     * directly into its own state.
+     *
+     * Re-opening the sheet on the same streaming track re-runs the
+     * source chain (no cache). LRCLIB is fast (~200ms typical) so the
+     * UX cost is acceptable, and avoiding Room means we don't have to
+     * invent a fake parent row for the FK CASCADE.
+     */
+    suspend fun resolveTransient(query: LyricsQuery): LyricsResult? =
+        sources.firstNotNullOfOrNull { it.resolve(query) }
 
     private companion object {
         private const val TAG = "LyricsRepository"

@@ -20,6 +20,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -28,9 +30,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.stash.data.lyrics.parser.LrcLine
+import kotlin.math.abs
 
 /**
  * v0.9.36 Task 12 — renderers for the lyrics sheet.
@@ -101,18 +105,29 @@ fun LyricsSyncedRenderer(
     ) {
         itemsIndexed(lines) { index, line ->
             val current = index == currentIndex
+            // Spotify-style tiered dimming: current line full alpha + bold,
+            // ±1 from current ~0.55, anything further ~0.28. Smooth alpha
+            // animation so the highlight glides rather than snaps when
+            // playback advances to the next line.
+            val distance = abs(index - currentIndex)
+            val targetAlpha = when {
+                current -> 1.0f
+                distance == 1 -> 0.55f
+                else -> 0.28f
+            }
+            val animatedAlpha by animateFloatAsState(
+                targetValue = targetAlpha,
+                animationSpec = tween(durationMillis = 250),
+                label = "lyrics-alpha-$index",
+            )
             Text(
                 text = line.text,
                 style = if (current) {
-                    MaterialTheme.typography.headlineMedium
+                    MaterialTheme.typography.headlineMedium.copy(fontWeight = FontWeight.Bold)
                 } else {
-                    MaterialTheme.typography.bodyLarge
+                    MaterialTheme.typography.titleLarge
                 },
-                color = if (current) {
-                    MaterialTheme.colorScheme.onSurface
-                } else {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.45f)
-                },
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = animatedAlpha),
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onLineTap(line.timestampMs) }

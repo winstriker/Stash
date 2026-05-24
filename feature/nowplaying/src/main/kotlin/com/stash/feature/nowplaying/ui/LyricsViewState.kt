@@ -4,6 +4,7 @@ import com.stash.core.data.db.entity.LyricsEntity
 import com.stash.core.model.Track
 import com.stash.data.lyrics.parser.LrcLine
 import com.stash.data.lyrics.parser.LrcParser
+import com.stash.data.lyrics.source.LyricsResult
 
 /**
  * v0.9.36 Task 12 — Now Playing lyrics sheet view state.
@@ -64,5 +65,31 @@ internal fun lyricsViewStateFor(track: Track, row: LyricsEntity?): LyricsViewSta
         }
     }
     row != null && !row.plainText.isNullOrBlank() -> LyricsViewState.Plain(row.plainText!!)
+    else -> LyricsViewState.None
+}
+
+/**
+ * Result-only mapper for the streaming-track path. Streaming-mode tracks
+ * have no persistent `tracks` row (id == 0L), so the ViewModel calls
+ * [com.stash.data.lyrics.LyricsRepository.resolveTransient] directly and
+ * feeds the raw [LyricsResult] through this mapper instead of going via
+ * Room. Logic mirrors [lyricsViewStateFor] (instrumental / synced /
+ * plain / none) minus the sentinel handling — a null result means
+ * "miss," not "never tried."
+ */
+internal fun lyricsViewStateForResult(result: LyricsResult?): LyricsViewState = when {
+    result == null -> LyricsViewState.None
+    result.instrumental -> LyricsViewState.Instrumental
+    result.syncedLrc != null -> {
+        val synced = result.syncedLrc!!
+        val lines = LrcParser.parse(synced)
+        val plain = result.plainText
+        when {
+            lines.isNotEmpty() -> LyricsViewState.Synced(lines, plain.orEmpty())
+            !plain.isNullOrBlank() -> LyricsViewState.Plain(plain)
+            else -> LyricsViewState.None
+        }
+    }
+    !result.plainText.isNullOrBlank() -> LyricsViewState.Plain(result.plainText!!)
     else -> LyricsViewState.None
 }
