@@ -79,9 +79,11 @@ class StashMixRefreshWorkerDedupTest {
         coEvery { mixGenerator.generate(dailyDiscover, capture(excludeCaptureDailyDiscover)) } returns listOf(track(20L), track(21L))
 
         // First Listen brings 5 discovery survivors; Deep Cuts brings 6 (10, 11 are also library); Daily Discover 7 (1 is in First Listen).
-        coEvery { discoveryQueueDao.getDoneTrackIdsForRecipe(firstListen.id, any()) } returns listOf(1L, 2L, 3L, 4L, 5L)
-        coEvery { discoveryQueueDao.getDoneTrackIdsForRecipe(deepCuts.id, any()) } returns listOf(6L, 7L, 8L, 9L, 10L, 11L)
-        coEvery { discoveryQueueDao.getDoneTrackIdsForRecipe(dailyDiscover.id, any()) } returns listOf(1L, 12L, 13L, 14L, 15L, 16L, 17L)
+        // v0.9.37: materializeMix now pulls survivors via PlaylistDao.getStreamableOrDoneTrackIdsForRecipe
+        // (downloaded OR streamable), so the stub moves from DiscoveryQueueDao to PlaylistDao.
+        coEvery { playlistDao.getStreamableOrDoneTrackIdsForRecipe(firstListen.id) } returns listOf(1L, 2L, 3L, 4L, 5L)
+        coEvery { playlistDao.getStreamableOrDoneTrackIdsForRecipe(deepCuts.id) } returns listOf(6L, 7L, 8L, 9L, 10L, 11L)
+        coEvery { playlistDao.getStreamableOrDoneTrackIdsForRecipe(dailyDiscover.id) } returns listOf(1L, 12L, 13L, 14L, 15L, 16L, 17L)
 
         coEvery { playlistDao.getById(any()) } returns null
         coEvery { playlistDao.insert(any()) } returnsMany listOf(100L, 200L, 300L)
