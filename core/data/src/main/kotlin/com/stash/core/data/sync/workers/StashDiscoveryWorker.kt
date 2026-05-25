@@ -13,11 +13,9 @@ import androidx.work.WorkerParameters
 import com.stash.core.data.db.dao.DiscoveryQueueDao
 import com.stash.core.model.DownloadNetworkMode
 import com.stash.core.data.prefs.DownloadNetworkPreference
-import com.stash.core.data.db.dao.DownloadQueueDao
 import com.stash.core.data.db.dao.StashMixRecipeDao
 import com.stash.core.data.db.dao.TrackDao
 import com.stash.core.data.db.entity.DiscoveryQueueEntity
-import com.stash.core.data.db.entity.DownloadQueueEntity
 import com.stash.core.data.db.entity.TrackEntity
 import com.stash.core.data.sync.TrackMatcher
 import com.stash.core.model.MusicSource
@@ -30,29 +28,38 @@ import java.util.concurrent.TimeUnit
  * [StashMixRefreshWorker]. For each one:
  *
  *  1. Check whether a track with the same canonical identity already
- *     exists in the library — if so, skip the download and just link the
- *     existing track into the recipe's playlist.
- *  2. Otherwise create a stub [TrackEntity] (is_downloaded = false) and
- *     file a [DownloadQueueEntity] row. The existing
- *     [TrackDownloadWorker] picks that up and performs the actual YT
- *     search + download, reusing every bit of matching infra we already
- *     ship. No duplicate code paths.
- *  3. Link the new (or found) track into the recipe's playlist so it
- *     appears in the mix as soon as its audio is downloaded.
- *  4. Mark the discovery row DONE with a reference to the created track
- *     so diagnostics can trace the seed → candidate → download chain.
+ *     exists (downloaded) in the library — if so, skip and just reuse
+ *     the existing track row when the materializer later links the
+ *     recipe's playlist.
+ *  2. Otherwise create a stub [TrackEntity] with `isStreamable = true,
+ *     isDownloaded = false`. v0.9.37 stream-only seam: no
+ *     `download_queue` row is filed. The v0.9.30 streaming engine
+ *     (`PlayerRepositoryImpl.buildMediaItemForTrack` → Qobuz/Kennyy +
+ *     YouTube fallback) plays the stub on demand without ever writing
+ *     a file to disk. Saves data + storage for what is, by recipe
+ *     design, ephemeral discovery content. Existing downloaded Mix
+ *     tracks remain on disk; no purge.
+ *  3. Mark the discovery row DONE with a reference to the created (or
+ *     reused) track so the next [StashMixRefreshWorker.materializeMix]
+ *     pass can link it into the recipe's playlist via
+ *     `PlaylistDao.getStreamableOrDoneTrackIdsForRecipe`.
  *
- * Caps per-recipe throughput at 10 new discoveries per rolling 7 days so
- * a mix with many pending candidates doesn't blow up the user's disk
- * overnight. Requires unmetered network + charging to be polite about
- * data and battery.
+ * v0.9.37 also dropped the `DownloadQueueDao` constructor injection —
+ * this worker no longer files download rows. The chained
+ * [DiscoveryDownloadWorker] still drains legacy / leftover rows in
+ * `download_queue` (orphan PENDING, retry-eligible FAILED from prior
+ * runs); see `doWork()`'s tail chain.
+ *
+ * Caps per-recipe throughput at 100 new discoveries per rolling 7 days
+ * (a hold-over from the download-era storage cap; storage cost is gone
+ * now, raising the cap is tracked as separate future work). Requires
+ * unmetered network + charging to be polite about data and battery.
  */
 @HiltWorker
 class StashDiscoveryWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val discoveryQueueDao: DiscoveryQueueDao,
-    private val downloadQueueDao: DownloadQueueDao,
     private val trackDao: TrackDao,
     private val recipeDao: StashMixRecipeDao,
     private val trackMatcher: TrackMatcher,
@@ -222,10 +229,18 @@ class StashDiscoveryWorker @AssistedInject constructor(
     )
 
     /**
-     * Processes a single pending discovery row. Reuses the existing
-     * "create track + enqueue download" pattern that DiffWorker uses for
-     * unmatched Spotify tracks, so downloads run through the same queue
-     * the sync pipeline already drains.
+     * Processes a single pending discovery row. v0.9.37 stream-only
+     * contract: creates (or reuses) a streamable stub [TrackEntity] for
+     * the row. The v0.9.30 streaming engine plays the stub on demand via
+     * the Qobuz/Kennyy + YouTube fallback chain; no file is downloaded.
+     * [StashMixRefreshWorker.materializeMix] picks the stubs up via
+     * `PlaylistDao.getStreamableOrDoneTrackIdsForRecipe` (v0.9.37) on the
+     * next refresh pass to link them into the recipe's playlist.
+     *
+     * Guards: blocklist-rejects the candidate before any insert, and
+     * skips recipes whose materialized playlist doesn't exist yet (the
+     * very first refresh hasn't run — materializer owns playlist
+     * creation, not this worker).
      */
     private suspend fun handle(
         entry: DiscoveryQueueEntity,
@@ -237,7 +252,12 @@ class StashDiscoveryWorker @AssistedInject constructor(
                 null,
                 "recipe ${entry.recipeId} missing",
             )
-        val playlistId = recipe.playlistId
+        // Don't process discoveries for un-materialized recipes — the
+        // first StashMixRefreshWorker pass creates the playlist row, and
+        // until that's run there's nothing for materializeMix to link
+        // this stub into. Leave the row PENDING-failed; next refresh
+        // cycle will re-queue.
+        recipe.playlistId
             ?: return HandledResult(
                 DiscoveryQueueEntity.STATUS_FAILED,
                 null,
@@ -274,7 +294,30 @@ class StashDiscoveryWorker @AssistedInject constructor(
             // Nothing to download — just link.
             existing.id
         } else {
-            // Create stub + enqueue.
+            // v0.9.37: stream-only seam. Every recipe in `stash_mix_recipes`
+            // is materialized as PlaylistType.STASH_MIX (see
+            // StashMixRefreshWorker.materializeMix), so every PENDING row
+            // this worker drains belongs to a Stash Mix. Per the v0.9.37
+            // spec we no longer file a `download_queue` row for these —
+            // instead the stub lands with `isStreamable = true` and the
+            // v0.9.30 streaming engine plays it on-demand via the
+            // Qobuz/Kennyy + YouTube fallback chain. Existing downloaded
+            // Mix tracks remain on disk and are untouched.
+            //
+            // Note: no `findByYoutubeId` upsert defense needed at this
+            // call site because the stub is inserted with `youtubeId =
+            // null` (the videoId is resolved later by
+            // StashDiscoveryWorker's chain into the streaming engine /
+            // player path, never by THIS row's insert). With both
+            // `spotifyUri` and `youtubeId` NULL the UNIQUE indexes can't
+            // collide; the canonical-identity dedup above already absorbs
+            // the only realistic cross-source race (streaming engine
+            // inserting a row with matching canonical title+artist first,
+            // which `findDownloadedByCanonical` won't catch because
+            // streaming inserts aren't `is_downloaded = 1`). Broadening
+            // that lookup is a separate refactor — out of scope for the
+            // stream-only seam; the worst-case here is a duplicate stub,
+            // not a constraint violation.
             val stub = TrackEntity(
                 title = entry.title,
                 artist = entry.artist,
@@ -282,17 +325,9 @@ class StashDiscoveryWorker @AssistedInject constructor(
                 canonicalTitle = canonicalTitle,
                 canonicalArtist = canonicalArtist,
                 isDownloaded = false,
+                isStreamable = true,
             )
-            val newId = trackDao.insert(stub)
-            downloadQueueDao.insert(
-                DownloadQueueEntity(
-                    trackId = newId,
-                    syncId = null,
-                    searchQuery = "${entry.artist} - ${entry.title}",
-                    youtubeUrl = null,
-                )
-            )
-            newId
+            trackDao.insert(stub)
         }
 
         // v0.9.21: Do NOT insert into playlist_tracks here. Earlier versions

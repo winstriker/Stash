@@ -149,6 +149,14 @@ interface MusicRepository {
      */
     fun observeTrackById(trackId: Long): Flow<Track?>
 
+    /**
+     * Live-observe a Track by its `youtubeId`. Now Playing falls back to
+     * this when `observeTrackById` returns null for a v0.9.30 streaming-
+     * engine synthetic id, so the heart icon picks up the row inserted
+     * by [ensureTrackPersisted] (issue #105 follow-up).
+     */
+    fun observeTrackByYoutubeId(youtubeId: String): Flow<Track?>
+
     // ── Mutations ───────────────────────────────────────────────────────
 
     /** Record a play event: increments play count and updates last-played. */
@@ -156,6 +164,24 @@ interface MusicRepository {
 
     /** Insert or replace a track. Returns the row ID. */
     suspend fun insertTrack(track: Track): Long
+
+    /**
+     * Ensures a Track row exists in Room for [track], returning its real
+     * Room PK. If [track.id] is non-zero and the row exists, returns it
+     * unchanged. Otherwise looks up by `youtube_id` (then canonical
+     * identity); if none match, inserts a fresh stub and returns the
+     * autogen id.
+     *
+     * Necessary because the v0.9.30 streaming engine synthesises a
+     * `videoId.hashCode().toLong()` for transient stream-only tracks
+     * (`PlayerRepositoryImpl:805-812`). That id is **not** a real
+     * `tracks.id`, so any FK-bearing write keyed on it
+     * (Liked-Songs cross-ref, download_queue) FK-violates. Call this
+     * first to resolve to a real id.
+     *
+     * Idempotent. Mirrors `SearchDownloadCoordinator.upsertSearchTrack`.
+     */
+    suspend fun ensureTrackPersisted(track: Track): Long
 
     /**
      * Delete a track from the database and remove its audio file from disk.
@@ -169,9 +195,17 @@ interface MusicRepository {
      * Queue [trackId] for a user-initiated download. Inserts a row into
      * `download_queue` with `sync_id = null` (distinguishing it from
      * sync-time downloads) and kicks the discovery download worker.
-     * No-op if the track is already downloaded or is missing.
+     *
+     * Returns true when a row was inserted and the worker enqueued;
+     * false when the track row is missing, already downloaded, or
+     * already has a non-terminal queue entry. Callers should base
+     * "Queued for download." toasts on this return — emitting the
+     * toast unconditionally lies to the user when the track id is a
+     * v0.9.30 streaming-engine synthetic and the row doesn't exist
+     * (issue #105). Use [ensureTrackPersisted] beforehand to convert
+     * a synthetic id to a real one.
      */
-    suspend fun queueDownload(trackId: Long)
+    suspend fun queueDownload(trackId: Long): Boolean
 
     /**
      * Remove the on-disk file for [trackId] and clear its download flags.

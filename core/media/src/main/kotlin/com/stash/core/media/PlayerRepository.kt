@@ -82,6 +82,22 @@ interface PlayerRepository {
      */
     val streamingHaltedEvents: kotlinx.coroutines.flow.SharedFlow<StreamingHaltedEvent>
 
+    /**
+     * Snackbar-targeted one-shot messages from playback flow. Used for
+     * conditions the player layer surfaces directly to the user:
+     *
+     *  - "Couldn't play this track right now." — `setQueue` couldn't
+     *    resolve the tapped track via any source.
+     *  - "End of offline Mix" — auto-advance silent-skip exhausted the
+     *    queue trying to find a playable item while offline (v0.9.37).
+     *
+     * Collected by NowPlayingViewModel and forwarded into its own
+     * `userMessages` SharedFlow so the Snackbar/Toast surfaces while the
+     * user is on Now Playing or anywhere else the global player UI is
+     * visible.
+     */
+    val userMessages: kotlinx.coroutines.flow.SharedFlow<String>
+
     /** Start or resume playback. */
     suspend fun play()
 

@@ -41,10 +41,17 @@ class StashLikedPlaylistRepository @Inject constructor(
         val playlistId = ensureSeeded()
         val existing = playlistDao.getCrossRef(playlistId, trackId)
         if (existing != null && existing.removedAt == null) return
+        // Order matters: mark the timestamp FIRST so the Room observation
+        // that fires after `insertCrossRef` already sees `stashLikedAt`
+        // set. Without this, the observer emits the row twice — once with
+        // stashLikedAt = null (right after the cross-ref insert), then
+        // again after `markStashLiked` — and the heart visual flickers
+        // un-red between the two emissions. The recount inside
+        // `addTrackToPlaylist` widens that gap noticeably (issue #105 follow-up).
+        trackDao.markStashLiked(trackId, System.currentTimeMillis())
         // Reuse existing helper for trackCount + position handling.
         // Mirrors linkTrackToDownloadsMix at MusicRepositoryImpl.kt:294.
         musicRepository.addTrackToPlaylist(trackId = trackId, playlistId = playlistId)
-        trackDao.markStashLiked(trackId, System.currentTimeMillis())
     }
 
     /**
@@ -64,8 +71,11 @@ class StashLikedPlaylistRepository @Inject constructor(
             trackDao.clearStashLiked(trackId)
             return
         }
-        musicRepository.removeTrackFromPlaylist(trackId = trackId, playlistId = playlistId)
+        // Clear FIRST for the same Room-emission-ordering reason as `add` —
+        // observers see one update with stashLikedAt = null, not a brief
+        // un-red→red flicker if cross-ref removal is observed first.
         trackDao.clearStashLiked(trackId)
+        musicRepository.removeTrackFromPlaylist(trackId = trackId, playlistId = playlistId)
     }
 
     /**

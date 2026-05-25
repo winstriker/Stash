@@ -191,6 +191,7 @@ class NowPlayingViewModel @Inject constructor(
         observePlayerStateLive()
         observeUserPlaylists()
         observeStreamingHaltedEvents()
+        observePlayerUserMessages()
     }
 
     // ------------------------------------------------------------------
@@ -221,11 +222,23 @@ class NowPlayingViewModel @Inject constructor(
     @OptIn(ExperimentalCoroutinesApi::class)
     private fun observePlayerStateLive() {
         val liveTrackFlow = playerRepository.playerState
-            .map { it.currentTrack?.id }
+            .map { it.currentTrack?.let { t -> t.id to t.youtubeId } }
             .distinctUntilChanged()
-            .flatMapLatest { id ->
-                if (id == null) flowOf<com.stash.core.model.Track?>(null)
-                else musicRepository.observeTrackById(id)
+            .flatMapLatest { key ->
+                if (key == null) flowOf<com.stash.core.model.Track?>(null)
+                else {
+                    val (id, ytId) = key
+                    // Falls back to a youtube_id lookup so the heart icon
+                    // (and other Room-driven fields) update for v0.9.30
+                    // streaming-engine tracks whose `id` is a synthetic
+                    // `videoId.hashCode().toLong()` that doesn't exist in
+                    // `tracks` until `ensureTrackPersisted` writes one
+                    // under a real autogen PK (issue #105 follow-up).
+                    musicRepository.observeTrackById(id).flatMapLatest { row ->
+                        if (row != null || ytId.isNullOrBlank()) flowOf(row)
+                        else musicRepository.observeTrackByYoutubeId(ytId)
+                    }
+                }
             }
 
         combine(
@@ -247,7 +260,12 @@ class NowPlayingViewModel @Inject constructor(
                     state.isStreaming &&
                     baseTrack != null &&
                     streamFormat != null &&
-                    streamFormat.id == baseTrack.id &&
+                    // ids diverge once `ensureTrackPersisted` writes a real
+                    // Room row for a streaming-engine synthetic id, so match
+                    // on youtube_id as a fallback to keep the codec badge alive.
+                    (streamFormat.id == baseTrack.id ||
+                        (!streamFormat.youtubeId.isNullOrBlank() &&
+                            streamFormat.youtubeId == baseTrack.youtubeId)) &&
                     streamFormat.fileFormat.isNotBlank() &&
                     streamFormat.fileFormat != "opus"
                 ) {
@@ -261,12 +279,24 @@ class NowPlayingViewModel @Inject constructor(
                         streamOrigin = streamFormat.streamOrigin,
                     )
                 } else baseTrack
-                val trackKey = if (track?.id == 0L) track.youtubeId.hashCode().toLong() else track?.id
-                val finalTrack = if (track != null && trackKey != null && optimistic.containsKey(trackKey)) {
+                // ExoPlayer always knows the real duration once the
+                // stream loads; the Track-domain durationMs may still be
+                // 0 for streaming-engine tracks whose search-result
+                // metadata didn't carry one. Prefer the player's truth
+                // so `ensureTrackPersisted` writes the right value when
+                // the user likes/downloads the currently-playing track
+                // (issue #105 follow-up: stream-only Liked Songs were
+                // landing with 0:00 duration).
+                val durationOverlaid = track?.let {
+                    if (it.durationMs <= 0L && state.durationMs > 0L) it.copy(durationMs = state.durationMs)
+                    else it
+                }
+                val trackKey = if (durationOverlaid?.id == 0L) durationOverlaid.youtubeId.hashCode().toLong() else durationOverlaid?.id
+                val finalTrack = if (durationOverlaid != null && trackKey != null && optimistic.containsKey(trackKey)) {
                     val optLiked = optimistic[trackKey]!!
-                    track.copy(stashLikedAt = if (optLiked) System.currentTimeMillis() else null)
+                    durationOverlaid.copy(stashLikedAt = if (optLiked) System.currentTimeMillis() else null)
                 } else {
-                    track
+                    durationOverlaid
                 }
 
                 current.copy(
@@ -332,6 +362,21 @@ class NowPlayingViewModel @Inject constructor(
                     "Streaming is failing \u2014 try a downloaded track or check your connection"
                 )
             }
+            .launchIn(viewModelScope)
+    }
+
+    /**
+     * Forwards [PlayerRepository.userMessages] emissions into the screen's
+     * Toast channel. Source examples:
+     *  - "Couldn't play this track right now." (setQueue tap failure)
+     *  - "End of offline Mix" (v0.9.37 auto-advance silent-skip exhausted
+     *    the queue while offline)
+     * The player layer already paused playback when relevant; this
+     * observer is purely informational.
+     */
+    private fun observePlayerUserMessages() {
+        playerRepository.userMessages
+            .onEach { msg -> _userMessages.emit(msg) }
             .launchIn(viewModelScope)
     }
 
@@ -475,8 +520,21 @@ class NowPlayingViewModel @Inject constructor(
                 musicRepository.removeDownload(track.id)
                 _userMessages.tryEmit("Download removed.")
             } else {
-                musicRepository.queueDownload(track.id)
-                _userMessages.tryEmit("Queued for download.")
+                // Resolve a synthetic streaming-engine id to a real DB row
+                // before queuing — otherwise `getById` returns null and the
+                // queue insert silently no-ops while the toast still fires
+                // (issue #105).
+                val realId = runCatching { musicRepository.ensureTrackPersisted(track) }
+                    .getOrElse { e ->
+                        android.util.Log.w("NowPlayingViewModel", "ensureTrackPersisted failed", e)
+                        _userMessages.tryEmit("Couldn't queue download.")
+                        return@launch
+                    }
+                val queued = musicRepository.queueDownload(realId)
+                _userMessages.tryEmit(
+                    if (queued) "Queued for download."
+                    else "Couldn't queue download."
+                )
             }
         }
     }
@@ -652,13 +710,13 @@ class NowPlayingViewModel @Inject constructor(
 
         viewModelScope.launch {
             runCatching {
-                var finalTrackId = track.id
-                if (finalTrackId == 0L) {
-                    // Not in library yet (search preview). Insert it first.
-                    // This creates a stub TrackEntity in the DB so the
-                    // Liked Songs cross-ref has a parent to point to.
-                    finalTrackId = musicRepository.insertTrack(track)
-                }
+                // Handles all three id shapes: real Room PK, search-preview
+                // id=0 (legacy), and v0.9.30 streaming-engine synthetic
+                // `videoId.hashCode().toLong()`. Without this, streaming-only
+                // tracks (e.g. Liked Songs played from network with no local
+                // file) FK-violate at the cross-ref insert and surface as
+                // "Couldn't add to Liked Songs" (issue #105).
+                val finalTrackId = musicRepository.ensureTrackPersisted(track)
 
                 if (wasLiked) {
                     stashLikedRepository.remove(finalTrackId)

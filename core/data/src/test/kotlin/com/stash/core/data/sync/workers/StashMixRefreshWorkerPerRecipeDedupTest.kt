@@ -88,7 +88,7 @@ class StashMixRefreshWorkerPerRecipeDedupTest {
         val excludeCapture = slot<Set<Long>>()
         coEvery { mixGenerator.generate(targetRecipe, capture(excludeCapture)) } returns emptyList()
         coEvery {
-            discoveryQueueDao.getDoneTrackIdsForRecipe(any(), any())
+            playlistDao.getStreamableOrDoneTrackIdsForRecipe(any())
         } returns emptyList()
 
         newWorker(recipeId = 1L).doWork()
@@ -112,7 +112,7 @@ class StashMixRefreshWorkerPerRecipeDedupTest {
         val excludeCapture = slot<Set<Long>>()
         coEvery { mixGenerator.generate(targetRecipe, capture(excludeCapture)) } returns emptyList()
         coEvery {
-            discoveryQueueDao.getDoneTrackIdsForRecipe(any(), any())
+            playlistDao.getStreamableOrDoneTrackIdsForRecipe(any())
         } returns emptyList()
 
         newWorker(recipeId = 1L).doWork()

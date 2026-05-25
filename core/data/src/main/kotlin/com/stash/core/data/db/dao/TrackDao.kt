@@ -991,6 +991,16 @@ interface TrackDao {
     fun observeLikeState(trackId: Long): Flow<TrackLikeState?>
 
     /**
+     * v0.9.37: youtube_id-keyed equivalent of [observeLikeState]. The
+     * notification mini-player and Now Playing both fall back to this
+     * when the active MediaItem's mediaId is a streaming-engine
+     * synthetic `videoId.hashCode().toLong()` that doesn't match any
+     * `tracks.id` (issue #105 follow-up).
+     */
+    @Query("SELECT id, stash_liked_at, spotify_saved_at, ytmusic_saved_at FROM tracks WHERE youtube_id = :youtubeId LIMIT 1")
+    fun observeLikeStateByYoutubeId(youtubeId: String): Flow<TrackLikeState?>
+
+    /**
      * v0.9.13: Live-observe a full track row by id. Now Playing uses
      * this as the canonical source for currentTrack — the Player only
      * provides id+title+artist+album+art via MediaItem extras, but
@@ -1002,6 +1012,18 @@ interface TrackDao {
      */
     @Query("SELECT * FROM tracks WHERE id = :trackId")
     fun observeById(trackId: Long): Flow<TrackEntity?>
+
+    /**
+     * Live-observe a track by its `youtube_id`. Needed by Now Playing so
+     * streaming-engine tracks (whose `currentTrack.id` is a synthetic
+     * `videoId.hashCode().toLong()`) can find the real Room row that
+     * `MusicRepository.ensureTrackPersisted` writes under a fresh autogen
+     * PK. Without this fallback the heart icon never reflects the post-
+     * persist `stashLikedAt` because `observeById(syntheticId)` returns
+     * null forever (issue #105 follow-up).
+     */
+    @Query("SELECT * FROM tracks WHERE youtube_id = :youtubeId LIMIT 1")
+    fun observeByYoutubeId(youtubeId: String): Flow<TrackEntity?>
 
     /**
      * v0.9.13: Count of tracks marked as auto-saved to Spotify since
@@ -1250,6 +1272,15 @@ interface TrackDao {
     /** Set the YouTube video ID for a track so future syncs don't re-queue it. */
     @Query("UPDATE tracks SET youtube_id = :youtubeId WHERE id = :trackId")
     suspend fun updateYoutubeId(trackId: Long, youtubeId: String)
+
+    /**
+     * Backfill duration_ms when the existing row has 0 (no duration yet —
+     * usually because the row was inserted by `ensureTrackPersisted` from
+     * a streaming-engine Track whose `durationMs` wasn't yet known at
+     * insert time). Issue #105 follow-up.
+     */
+    @Query("UPDATE tracks SET duration_ms = :durationMs WHERE id = :trackId AND duration_ms <= 0")
+    suspend fun backfillDurationIfMissing(trackId: Long, durationMs: Long)
 
     /**
      * Set the cached canonical ATV/OMV video id for this track. Called once

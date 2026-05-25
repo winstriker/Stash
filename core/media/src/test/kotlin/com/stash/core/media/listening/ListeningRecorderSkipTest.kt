@@ -44,6 +44,8 @@ class ListeningRecorderSkipTest {
         override val currentPosition: Flow<Long> get() = throw UnsupportedOperationException()
         override val streamingHaltedEvents: SharedFlow<StreamingHaltedEvent> =
             MutableSharedFlow<StreamingHaltedEvent>().asSharedFlow()
+        override val userMessages: SharedFlow<String> =
+            MutableSharedFlow<String>().asSharedFlow()
         fun set(state: PlayerState) {
             flow.value = state
         }

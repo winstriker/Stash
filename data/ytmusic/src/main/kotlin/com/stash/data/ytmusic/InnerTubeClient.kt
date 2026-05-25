@@ -281,15 +281,21 @@ class InnerTubeClient @Inject constructor(
      * @param query The search query string.
      * @return The parsed JSON response, or null on failure.
      */
-    suspend fun search(query: String): JsonObject? = withContext(Dispatchers.IO) {
+    suspend fun search(query: String, params: String? = null): JsonObject? = withContext(Dispatchers.IO) {
         val cookie = tokenManager.getYouTubeCookie()
         val variant = InnerTubeVariant.WEB_REMIX
         val body = buildJsonObject {
             put("context", buildContext(variant))
             put("query", query)
+            if (params != null) put("params", params)
         }
         executeRequest("$BASE_URL/search", body, cookie, variant)
     }
+
+    /** ytmusicapi-derived filter selector that constrains search results to the
+     *  "Songs" shelf only. With this set, the response reverts to the legacy
+     *  `musicShelfRenderer` shape that downstream parsers expect. */
+    private val songsFilterParams = "EgWKAQIIAWoKEAoQAxAJEAQQBQ%3D%3D"
 
     /**
      * Calls the InnerTube `player` action to get actual video metadata.
@@ -406,16 +412,30 @@ class InnerTubeClient @Inject constructor(
         withContext(Dispatchers.IO) {
             val cookie = tokenManager.getYouTubeCookie()
             val variant = InnerTubeVariant.WEB_REMIX
+            // YT's anti-bot challenge for /player rejects requests missing
+            // playbackContext.contentPlaybackContext.signatureTimestamp with
+            // a RELOAD_PAGE error. signatureTimestamp is the day number
+            // (days since epoch) and tells YouTube which JS player build the
+            // client is on; sending today's value passes the freshness check.
+            val signatureTimestamp = (System.currentTimeMillis() / 86_400_000L).toInt() - 1
             val body = buildJsonObject {
                 put("context", buildContext(variant))
                 put("videoId", videoId)
+                putJsonObject("playbackContext") {
+                    putJsonObject("contentPlaybackContext") {
+                        put("signatureTimestamp", signatureTimestamp)
+                    }
+                }
             }
             val response = executeRequest("$BASE_URL/player", body, cookie, variant)
                 ?: return@withContext null
             PlaybackTrackingParser().extract(response)
                 .also { url ->
                     if (url == null) {
-                        Log.w(TAG, "getPlaybackTracking: no playbackTracking block for $videoId")
+                        val playStatus = response["playabilityStatus"]?.jsonObject
+                            ?.get("status")?.jsonPrimitive?.content
+                        Log.w(TAG, "getPlaybackTracking: no playbackTracking block for " +
+                            "$videoId (playabilityStatus=$playStatus)")
                     }
                 }
         }
@@ -444,7 +464,7 @@ class InnerTubeClient @Inject constructor(
     suspend fun searchCanonical(artist: String, title: String): String? =
         withContext(Dispatchers.IO) {
             val query = "$artist $title"
-            val response = search(query) ?: return@withContext null
+            val response = search(query, params = songsFilterParams) ?: return@withContext null
 
             // Walk the Songs shelf(ves) inside the search response. Each row is a
             // musicResponsiveListItemRenderer; we extract videoId and musicVideoType

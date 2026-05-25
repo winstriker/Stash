@@ -449,8 +449,19 @@ class StashMixRefreshWorker @AssistedInject constructor(
         // wider taste graph) the older limit could exhaust before we found
         // discoveryCap survivors. Headroom is bounded by the total recipe
         // backlog — DAO query has its own LIMIT clause.
-        val rawCandidateIds = discoveryQueueDao
-            .getDoneTrackIdsForRecipe(recipe.id, limit = discoveryCap * 2 + excludeIds.size)
+        //
+        // v0.9.37: swap to playlistDao.getStreamableOrDoneTrackIdsForRecipe
+        // so stream-only DONE rows (is_downloaded=0, is_streamable=1) also
+        // make it into the Mix playlist. The new DAO method has NO limit
+        // parameter (kept the query simple — the spec's Section 8 still
+        // owns the per-recipe cap revisit). We trim post-fetch with .take
+        // to preserve the over-fetch headroom semantics from above. ORDER
+        // BY completed_at DESC inside the query means .take still slides
+        // newest-first.
+        val fetchLimit = discoveryCap * 2 + excludeIds.size
+        val rawCandidateIds = playlistDao
+            .getStreamableOrDoneTrackIdsForRecipe(recipe.id)
+            .take(fetchLimit)
         val nonLibraryCandidates = rawCandidateIds.filter { it !in librarySet }
         // v0.9.21: soft cross-mix dedup. Prefer survivors not already claimed
         // by an earlier-ordered mix; if dedup leaves us below the cap, backfill

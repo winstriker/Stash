@@ -36,8 +36,11 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.guava.future
@@ -79,6 +82,31 @@ class StashPlaybackService : MediaLibraryService() {
 
         /** Extra key for the track ID in MediaMetadata extras. */
         const val EXTRA_TRACK_ID = "stash_track_id"
+
+        /**
+         * Extra key for the track's YouTube video id. Carried alongside
+         * [EXTRA_TRACK_ID] so the notification heart can resolve a
+         * v0.9.30 streaming-engine synthetic id to a real DB row via
+         * `TrackDao.findByYoutubeId` (issue #105 fix).
+         */
+        const val EXTRA_TRACK_YOUTUBE_ID = "stash_track_youtube_id"
+
+        /**
+         * Extra key for the track's duration in milliseconds. Without
+         * this, `MediaItem.toTrack` rehydrates streaming tracks with
+         * `durationMs = 0` (the domain default), and `ensureTrackPersisted`
+         * then inserts a Liked-Songs row with duration 0:00 (issue #105
+         * follow-up: Liked Songs detail showed 0:00 for stream-only tracks).
+         */
+        const val EXTRA_TRACK_DURATION_MS = "stash_track_duration_ms"
+
+        /**
+         * Extra key for the track's `isStreamable` flag. Carried alongside
+         * [EXTRA_TRACK_ID] so the auto-advance listener can decide whether
+         * to silent-skip a track that the queue would play but the user
+         * can't reach (stream-only + offline). v0.9.37.
+         */
+        const val EXTRA_TRACK_IS_STREAMABLE = "stash_track_is_streamable"
 
         // ── Streaming-format extras ───────────────────────────────────
         // Written into MediaMetadata.extras when a streaming-only track
@@ -311,7 +339,9 @@ class StashPlaybackService : MediaLibraryService() {
     private fun updateCustomLayout() {
         val session = mediaSession ?: return
         val player = session.player
-        val trackId = player.currentMediaItem?.mediaId?.toLongOrNull()
+        val mediaItem = player.currentMediaItem
+        val trackId = mediaItem?.mediaId?.toLongOrNull()
+        val youtubeId = mediaItem?.mediaMetadata?.extras?.getString(EXTRA_TRACK_YOUTUBE_ID)
 
         if (trackId == null) {
             likeObserverJob?.cancel()
@@ -331,9 +361,19 @@ class StashPlaybackService : MediaLibraryService() {
             pushLayout(session, player, false)
 
             likeObserverJob = serviceScope.launch {
-                trackDao.observeLikeState(trackId).collect { state ->
+                // The id-keyed observer doesn't match streaming-engine
+                // synthetic ids; fall back to youtube_id so the heart
+                // tracks Room's truth even for stream-only tracks. The
+                // service stays in sync with Now Playing's optimistic
+                // flip because `MusicRepository.ensureTrackPersisted`
+                // writes a row with the same `youtube_id` on like.
+                val likeFlow = trackDao.observeLikeState(trackId)
+                    .flatMapLatest { state ->
+                        if (state != null || youtubeId.isNullOrBlank()) flowOf(state)
+                        else trackDao.observeLikeStateByYoutubeId(youtubeId)
+                    }
+                likeFlow.collect { state ->
                     val isLiked = state?.stashLikedAt != null
-                    // Update if the state actually changed, or if we haven't pushed for this track yet.
                     if (isLiked != lastIsLiked) {
                         lastIsLiked = isLiked
                         pushLayout(session, player, lastIsLiked)
@@ -421,6 +461,69 @@ class StashPlaybackService : MediaLibraryService() {
         super.onDestroy()
     }
 
+    /**
+     * Resolves the Room PK for a Like-toggle from MediaSession state. The
+     * `mediaId` may be a v0.9.30 streaming-engine synthetic id
+     * (`videoId.hashCode().toLong()`) that doesn't exist in `tracks` —
+     * passing it to a FK-bearing write crashes the service. Mirrors the
+     * upsert pattern in `MusicRepositoryImpl.ensureTrackPersisted` /
+     * `SearchDownloadCoordinator.upsertSearchTrack`.
+     *
+     * @return the real `tracks.id` to use; never returns a synthetic id.
+     * @throws IllegalStateException when no identity info is recoverable
+     *   from the MediaItem (i.e. neither a real candidate id nor a
+     *   youtubeId / title / artist that maps to one).
+     */
+    private suspend fun resolveTrackIdForLike(
+        candidateId: Long,
+        youtubeId: String?,
+        metadata: MediaMetadata,
+    ): Long {
+        // Real Room PK already? Cheap exit.
+        if (candidateId > 0L && trackDao.getById(candidateId) != null) return candidateId
+
+        // YouTube id is the most reliable secondary identity.
+        if (!youtubeId.isNullOrBlank()) {
+            trackDao.findByYoutubeId(youtubeId)?.let { return it.id }
+        }
+
+        val title = metadata.title?.toString().orEmpty()
+        val artist = metadata.artist?.toString().orEmpty()
+        val album = metadata.albumTitle?.toString().orEmpty()
+        val albumArtist = metadata.albumArtist?.toString().orEmpty()
+        val cTitle = canonicalizeIdentity(title)
+        val cArtist = canonicalizeIdentity(artist)
+
+        if (cTitle.isNotBlank() && cArtist.isNotBlank()) {
+            trackDao.findByCanonicalIdentity(cTitle, cArtist)?.let { return it.id }
+        }
+
+        check(title.isNotBlank() && artist.isNotBlank()) {
+            "Cannot resolve track id for like: no youtubeId and no title/artist metadata"
+        }
+
+        return trackDao.insert(
+            TrackEntity(
+                title = title,
+                artist = artist,
+                album = album,
+                albumArtist = albumArtist,
+                youtubeId = youtubeId,
+                canonicalTitle = cTitle,
+                canonicalArtist = cArtist,
+                source = com.stash.core.model.MusicSource.YOUTUBE,
+                isStreamable = true,
+                isDownloaded = false,
+            )
+        )
+    }
+
+    private fun canonicalizeIdentity(s: String): String =
+        s.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
+
     // ---- MediaLibrarySession.Callback ----
 
     private inner class StashSessionCallback : MediaLibrarySession.Callback {
@@ -497,7 +600,9 @@ class StashPlaybackService : MediaLibraryService() {
                     val playlistId = mediaItems[0].mediaId.removePrefix(SHUFFLE_PLAY_PREFIX).toLongOrNull()
                     if (playlistId != null) {
                         val tracks = playlistDao.getTracksForPlaylist(playlistId)
-                        val items = tracks.filter{track -> track.isDownloaded}.map { track ->
+                        // v0.9.37: include streamable tracks so stream-only Mix entries are
+                        // playable. Downloaded-only filter would silently drop them.
+                        val items = tracks.filter{track -> track.isDownloaded || track.isStreamable}.map { track ->
                             MediaItem.Builder()
                                 .setMediaId(track.id.toString())
                                 .setUri(track.filePath ?: "")
@@ -746,7 +851,9 @@ class StashPlaybackService : MediaLibraryService() {
                                     )
                                     .build()
 
-                                val tracks = playlistDao.getTracksForPlaylist(playlistId).filter{track -> track.isDownloaded}.map { track ->
+                                // v0.9.37: include streamable tracks so stream-only Mix entries are
+                                // playable. Downloaded-only filter would silently drop them.
+                                val tracks = playlistDao.getTracksForPlaylist(playlistId).filter{track -> track.isDownloaded || track.isStreamable}.map { track ->
                                     MediaItem.Builder()
                                         .setMediaId(track.id.toString())
                                         .setUri(track.filePath ?: "")
@@ -861,19 +968,44 @@ class StashPlaybackService : MediaLibraryService() {
                     }
                 }
                 COMMAND_TOGGLE_LIKE -> {
-                    val trackId = session.player.currentMediaItem?.mediaId?.toLongOrNull()
-                    if (trackId != null) {
+                    val mediaItem = session.player.currentMediaItem
+                    val mediaMetadata = mediaItem?.mediaMetadata
+                    val candidateId = mediaItem?.mediaId?.toLongOrNull()
+                    val youtubeId = mediaMetadata?.extras?.getString(EXTRA_TRACK_YOUTUBE_ID)
+
+                    if (candidateId != null && mediaMetadata != null) {
                         // Optimistic update: toggle the local state and push the layout
                         // immediately so the UI feels snappy and avoids race conditions
                         // where multiple clicks see the same stale DB state.
-                        lastIsLiked = !lastIsLiked
-                        pushLayout(session, session.player, lastIsLiked)
+                        val newLikeState = !lastIsLiked
+                        lastIsLiked = newLikeState
+                        pushLayout(session, session.player, newLikeState)
 
                         serviceScope.launch {
-                            if (lastIsLiked) {
-                                stashLikedRepository.add(trackId)
-                            } else {
-                                stashLikedRepository.remove(trackId)
+                            runCatching {
+                                // Resolve the real Room PK. The mediaId may be a
+                                // v0.9.30 streaming-engine synthetic id
+                                // (`videoId.hashCode().toLong()`); without this
+                                // resolve the next call FK-violates on
+                                // `tracks.id` and crashes the service process
+                                // (issue #105).
+                                val realId = resolveTrackIdForLike(
+                                    candidateId = candidateId,
+                                    youtubeId = youtubeId,
+                                    metadata = mediaMetadata,
+                                )
+
+                                if (newLikeState) stashLikedRepository.add(realId)
+                                else              stashLikedRepository.remove(realId)
+                            }.onFailure { e ->
+                                android.util.Log.w(
+                                    "StashPlayback",
+                                    "notification like toggle failed for candidateId=$candidateId yt=$youtubeId",
+                                    e,
+                                )
+                                // Roll back the optimistic flip so the UI reflects truth.
+                                lastIsLiked = !newLikeState
+                                pushLayout(session, session.player, !newLikeState)
                             }
                         }
                     }

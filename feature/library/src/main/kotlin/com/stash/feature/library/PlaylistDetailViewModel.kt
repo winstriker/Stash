@@ -7,6 +7,7 @@ import android.net.Uri
 import com.stash.core.data.repository.MusicRepository
 import com.stash.core.media.BulkPlayAction
 import com.stash.core.media.PlayerRepository
+import com.stash.core.media.streaming.ConnectivityMonitor
 import com.stash.core.model.Playlist
 import com.stash.core.model.PlaylistType
 import com.stash.core.model.Track
@@ -58,6 +59,7 @@ class PlaylistDetailViewModel @Inject constructor(
     private val playerRepository: PlayerRepository,
     private val playlistImageHelper: PlaylistImageHelper,
     private val streamingPreference: com.stash.core.data.prefs.StreamingPreference,
+    private val connectivityMonitor: ConnectivityMonitor,
 ) : ViewModel() {
 
     /** The playlist ID extracted from the navigation route arguments. */
@@ -144,6 +146,22 @@ class PlaylistDetailViewModel @Inject constructor(
      * filtered out.
      */
     fun playTrack(trackId: Long) {
+        // ── Stream-only offline guard (Task 5: Mixes Stream-Only) ──
+        // Stream-only Mix tracks (isStreamable + !isDownloaded) have no
+        // local audio and require network. When the device has no validated
+        // internet path, tapping them would either fail or burn time inside
+        // ExoPlayer's read. Bail out early with a Snackbar so the user knows
+        // *why* nothing happened. Downloaded tracks always play (local file
+        // works offline). Stream-only tracks online go through normal play.
+        val tapped = uiState.value.tracks.firstOrNull { it.id == trackId }
+        if (tapped != null &&
+            tapped.isStreamable && !tapped.isDownloaded &&
+            !connectivityMonitor.isConnected()
+        ) {
+            _userMessages.tryEmit("Online only — connect to play this track")
+            return
+        }
+
         viewModelScope.launch {
             _tappedTrackId.value = trackId
             try {

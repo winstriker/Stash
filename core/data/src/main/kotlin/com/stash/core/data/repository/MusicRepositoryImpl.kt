@@ -372,6 +372,9 @@ class MusicRepositoryImpl @Inject constructor(
     override fun observeTrackById(trackId: Long): Flow<Track?> =
         trackDao.observeById(trackId).map { it?.toDomain() }
 
+    override fun observeTrackByYoutubeId(youtubeId: String): Flow<Track?> =
+        trackDao.observeByYoutubeId(youtubeId).map { it?.toDomain() }
+
     override suspend fun getPlaylistWithTracks(id: Long): Playlist? {
         val result = playlistDao.getPlaylistWithTracks(id) ?: return null
         return result.playlist.toDomain().copy(
@@ -388,6 +391,58 @@ class MusicRepositoryImpl @Inject constructor(
 
     override suspend fun insertTrack(track: Track): Long =
         trackDao.insert(track.toEntity())
+
+    override suspend fun ensureTrackPersisted(track: Track): Long {
+        // Quick exit: real DB row already.
+        if (track.id > 0L) {
+            val existing = trackDao.getById(track.id)
+            if (existing != null) {
+                backfillDurationIfBetter(existing.id, existing.durationMs, track.durationMs)
+                return track.id
+            }
+        }
+
+        // Upsert by youtube_id, then canonical identity.
+        val youtubeId = track.youtubeId
+        if (!youtubeId.isNullOrBlank()) {
+            trackDao.findByYoutubeId(youtubeId)?.let { existing ->
+                backfillDurationIfBetter(existing.id, existing.durationMs, track.durationMs)
+                return existing.id
+            }
+        }
+        val cTitle = canonicalizeIdentity(track.title)
+        val cArtist = canonicalizeIdentity(track.artist)
+        if (cTitle.isNotBlank() && cArtist.isNotBlank()) {
+            trackDao.findByCanonicalIdentity(cTitle, cArtist)?.let { existing ->
+                backfillDurationIfBetter(existing.id, existing.durationMs, track.durationMs)
+                return existing.id
+            }
+        }
+
+        // Insert a fresh stub — id = 0 so Room autogens.
+        return trackDao.insert(
+            track.toEntity().copy(
+                id = 0L,
+                canonicalTitle = cTitle,
+                canonicalArtist = cArtist,
+                isStreamable = true,
+            )
+        )
+    }
+
+    private suspend fun backfillDurationIfBetter(trackId: Long, existing: Long, incoming: Long) {
+        if (existing <= 0L && incoming > 0L) {
+            trackDao.backfillDurationIfMissing(trackId, incoming)
+        }
+    }
+
+    /** Same normalization as [SearchDownloadCoordinator.canonicalize] — kept
+     *  local to avoid leaking that private helper out of `:data:download`. */
+    private fun canonicalizeIdentity(s: String): String =
+        s.lowercase()
+            .replace(Regex("[^\\p{L}\\p{N}\\s]"), " ")
+            .replace(Regex("\\s+"), " ")
+            .trim()
 
     override suspend fun deleteTrack(track: Track): Boolean {
         // Best-effort file deletion -- the file may already be gone.
@@ -408,12 +463,12 @@ class MusicRepositoryImpl @Inject constructor(
     // discovery-worker partition. Removal nulls the file_path / flags
     // but keeps the row so the track remains streamable (Path A).
 
-    override suspend fun queueDownload(trackId: Long) {
-        val entity = trackDao.getById(trackId) ?: return
-        if (entity.isDownloaded) return
+    override suspend fun queueDownload(trackId: Long): Boolean {
+        val entity = trackDao.getById(trackId) ?: return false
+        if (entity.isDownloaded) return false
 
         val existing = downloadQueueDao.getByTrackId(trackId)
-        if (existing != null && existing.status in NON_TERMINAL_QUEUE_STATES) return
+        if (existing != null && existing.status in NON_TERMINAL_QUEUE_STATES) return false
 
         downloadQueueDao.insert(
             com.stash.core.data.db.entity.DownloadQueueEntity(
@@ -429,6 +484,7 @@ class MusicRepositoryImpl @Inject constructor(
             context = context,
             constraints = com.stash.core.data.sync.workers.constraintsForManualTrigger(mode),
         )
+        return true
     }
 
     override suspend fun removeDownload(trackId: Long) {
@@ -523,9 +579,12 @@ class MusicRepositoryImpl @Inject constructor(
                 locallyAdded = true,
             )
         )
-        // v0.9.27 — count downloaded-only here; stream-only tracks don't
-        // affect the persisted track_count metric used for UI badges.
-        val count = trackDao.getByPlaylist(playlistId, includeStreamable = false).first().size
+        // v0.9.37 — count downloaded + streamable. Stream-only tracks
+        // (e.g. Liked Songs added from the Now Playing heart on a
+        // streaming track) are first-class playlist members under the
+        // streaming-engine model and must be reflected in the badge,
+        // or the Library card lies ("1 tracks" but the detail shows 4).
+        val count = trackDao.getByPlaylist(playlistId, includeStreamable = true).first().size
         playlistDao.updateTrackCount(playlistId, count)
     }
 
@@ -550,9 +609,12 @@ class MusicRepositoryImpl @Inject constructor(
 
     override suspend fun removeTrackFromPlaylist(trackId: Long, playlistId: Long) {
         playlistDao.softDeleteTrackFromPlaylist(playlistId, trackId)
-        // v0.9.27 — count downloaded-only here; stream-only tracks don't
-        // affect the persisted track_count metric used for UI badges.
-        val count = trackDao.getByPlaylist(playlistId, includeStreamable = false).first().size
+        // v0.9.37 — count downloaded + streamable. Stream-only tracks
+        // (e.g. Liked Songs added from the Now Playing heart on a
+        // streaming track) are first-class playlist members under the
+        // streaming-engine model and must be reflected in the badge,
+        // or the Library card lies ("1 tracks" but the detail shows 4).
+        val count = trackDao.getByPlaylist(playlistId, includeStreamable = true).first().size
         playlistDao.updateTrackCount(playlistId, count)
     }
 
