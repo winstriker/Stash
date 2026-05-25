@@ -13,11 +13,9 @@ import androidx.work.WorkerParameters
 import com.stash.core.data.db.dao.DiscoveryQueueDao
 import com.stash.core.model.DownloadNetworkMode
 import com.stash.core.data.prefs.DownloadNetworkPreference
-import com.stash.core.data.db.dao.DownloadQueueDao
 import com.stash.core.data.db.dao.StashMixRecipeDao
 import com.stash.core.data.db.dao.TrackDao
 import com.stash.core.data.db.entity.DiscoveryQueueEntity
-import com.stash.core.data.db.entity.DownloadQueueEntity
 import com.stash.core.data.db.entity.TrackEntity
 import com.stash.core.data.sync.TrackMatcher
 import com.stash.core.model.MusicSource
@@ -35,7 +33,7 @@ import java.util.concurrent.TimeUnit
  *     recipe's playlist.
  *  2. Otherwise create a stub [TrackEntity] with `isStreamable = true,
  *     isDownloaded = false`. v0.9.37 stream-only seam: no
- *     [DownloadQueueEntity] is filed. The v0.9.30 streaming engine
+ *     `download_queue` row is filed. The v0.9.30 streaming engine
  *     (`PlayerRepositoryImpl.buildMediaItemForTrack` → Qobuz/Kennyy +
  *     YouTube fallback) plays the stub on demand without ever writing
  *     a file to disk. Saves data + storage for what is, by recipe
@@ -46,9 +44,11 @@ import java.util.concurrent.TimeUnit
  *     pass can link it into the recipe's playlist via
  *     `PlaylistDao.getStreamableOrDoneTrackIdsForRecipe`.
  *
- * [downloadQueueDao] is retained for legacy / leftover rows the chained
- * [DiscoveryDownloadWorker] still drains — this worker itself no longer
- * inserts new rows there.
+ * v0.9.37 also dropped the `DownloadQueueDao` constructor injection —
+ * this worker no longer files download rows. The chained
+ * [DiscoveryDownloadWorker] still drains legacy / leftover rows in
+ * `download_queue` (orphan PENDING, retry-eligible FAILED from prior
+ * runs); see `doWork()`'s tail chain.
  *
  * Caps per-recipe throughput at 100 new discoveries per rolling 7 days
  * (a hold-over from the download-era storage cap; storage cost is gone
@@ -60,7 +60,6 @@ class StashDiscoveryWorker @AssistedInject constructor(
     @Assisted appContext: Context,
     @Assisted params: WorkerParameters,
     private val discoveryQueueDao: DiscoveryQueueDao,
-    private val downloadQueueDao: DownloadQueueDao,
     private val trackDao: TrackDao,
     private val recipeDao: StashMixRecipeDao,
     private val trackMatcher: TrackMatcher,
@@ -230,10 +229,18 @@ class StashDiscoveryWorker @AssistedInject constructor(
     )
 
     /**
-     * Processes a single pending discovery row. Reuses the existing
-     * "create track + enqueue download" pattern that DiffWorker uses for
-     * unmatched Spotify tracks, so downloads run through the same queue
-     * the sync pipeline already drains.
+     * Processes a single pending discovery row. v0.9.37 stream-only
+     * contract: creates (or reuses) a streamable stub [TrackEntity] for
+     * the row. The v0.9.30 streaming engine plays the stub on demand via
+     * the Qobuz/Kennyy + YouTube fallback chain; no file is downloaded.
+     * [StashMixRefreshWorker.materializeMix] picks the stubs up via
+     * `PlaylistDao.getStreamableOrDoneTrackIdsForRecipe` (v0.9.37) on the
+     * next refresh pass to link them into the recipe's playlist.
+     *
+     * Guards: blocklist-rejects the candidate before any insert, and
+     * skips recipes whose materialized playlist doesn't exist yet (the
+     * very first refresh hasn't run — materializer owns playlist
+     * creation, not this worker).
      */
     private suspend fun handle(
         entry: DiscoveryQueueEntity,
@@ -245,7 +252,12 @@ class StashDiscoveryWorker @AssistedInject constructor(
                 null,
                 "recipe ${entry.recipeId} missing",
             )
-        val playlistId = recipe.playlistId
+        // Don't process discoveries for un-materialized recipes — the
+        // first StashMixRefreshWorker pass creates the playlist row, and
+        // until that's run there's nothing for materializeMix to link
+        // this stub into. Leave the row PENDING-failed; next refresh
+        // cycle will re-queue.
+        recipe.playlistId
             ?: return HandledResult(
                 DiscoveryQueueEntity.STATUS_FAILED,
                 null,

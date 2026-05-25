@@ -4,11 +4,9 @@ import android.content.Context
 import androidx.work.WorkerParameters
 import com.stash.core.data.blocklist.BlocklistGuard
 import com.stash.core.data.db.dao.DiscoveryQueueDao
-import com.stash.core.data.db.dao.DownloadQueueDao
 import com.stash.core.data.db.dao.StashMixRecipeDao
 import com.stash.core.data.db.dao.TrackDao
 import com.stash.core.data.db.entity.DiscoveryQueueEntity
-import com.stash.core.data.db.entity.DownloadQueueEntity
 import com.stash.core.data.db.entity.StashMixRecipeEntity
 import com.stash.core.data.db.entity.TrackEntity
 import com.stash.core.data.prefs.DownloadNetworkPreference
@@ -31,16 +29,21 @@ import org.junit.Test
  * MockK end-to-end test for [StashDiscoveryWorker]'s v0.9.37 stream-only
  * seam. Every recipe in `stash_mix_recipes` is materialized as
  * `PlaylistType.STASH_MIX`, so this worker — whose only job is to drain
- * PENDING discoveries for those recipes — must:
- *   1. Create the stub [TrackEntity] with `isStreamable = true`,
- *      `isDownloaded = false`.
- *   2. **Skip** the `downloadQueueDao.insert(...)` call that the pre-v0.9.37
- *      flow used to file every discovery against [DiscoveryDownloadWorker].
+ * PENDING discoveries for those recipes — must create the stub
+ * [TrackEntity] with `isStreamable = true`, `isDownloaded = false`.
  *
  * The downstream `StashMixRefreshWorker.materializeMix` (Task 3) then picks
  * the stream-only stub up via the new
  * `PlaylistDao.getStreamableOrDoneTrackIdsForRecipe` query so the new track
  * surfaces in the Mix playlist without ever touching the download pipeline.
+ *
+ * Note on the "skip download_queue" guarantee: pre-cleanup, this test held
+ * a `coVerify(exactly = 0) { downloadQueueDao.insert(...) }` assertion. The
+ * cleanup removed the `DownloadQueueDao` injection from
+ * [StashDiscoveryWorker] entirely, so the runtime check is now a stronger
+ * compile-time guarantee — there is no DAO reference for the worker to
+ * call. If a future change re-adds the DAO, the constructor signature
+ * shift will force this test to be updated, restoring the assertion.
  *
  * `DiscoveryDownloadWorker.enqueueOneTime` is mocked because the production
  * `doWork()` chains a manual-trigger download sweep at the end — irrelevant
@@ -50,7 +53,6 @@ class StashDiscoveryWorkerStreamOnlyTest {
 
     private val appContext: Context = mockk(relaxed = true)
     private val discoveryQueueDao: DiscoveryQueueDao = mockk(relaxed = true)
-    private val downloadQueueDao: DownloadQueueDao = mockk(relaxed = true)
     private val trackDao: TrackDao = mockk(relaxed = true)
     private val recipeDao: StashMixRecipeDao = mockk(relaxed = true)
     // TrackMatcher is a final @Singleton class with no Android deps — use the
@@ -80,7 +82,7 @@ class StashDiscoveryWorkerStreamOnlyTest {
         val params: WorkerParameters = mockk(relaxed = true)
         return StashDiscoveryWorker(
             appContext, params,
-            discoveryQueueDao, downloadQueueDao, trackDao, recipeDao,
+            discoveryQueueDao, trackDao, recipeDao,
             trackMatcher, blocklistGuard, downloadNetworkPreference,
         )
     }
@@ -135,10 +137,9 @@ class StashDiscoveryWorkerStreamOnlyTest {
             insertedTrack.captured.isDownloaded,
         )
 
-        // Critical assertion: no download_queue row for the new stub. This is
-        // what diverts the new discovery from the v0.9.20 download pipeline
-        // onto the v0.9.30 streaming engine.
-        coVerify(exactly = 0) { downloadQueueDao.insert(any<DownloadQueueEntity>()) }
+        // Critical "no download_queue insert" guarantee is now structural
+        // (see class KDoc): the worker no longer holds a DownloadQueueDao
+        // reference, so there is nothing to call. Compile-time-enforced.
 
         // Discovery row was still marked DONE with the new trackId so the
         // materializer can re-link it on the next mix refresh.
@@ -196,7 +197,7 @@ class StashDiscoveryWorkerStreamOnlyTest {
         newWorker().doWork()
 
         coVerify(exactly = 0) { trackDao.insert(any<TrackEntity>()) }
-        coVerify(exactly = 0) { downloadQueueDao.insert(any<DownloadQueueEntity>()) }
+        // "no download_queue insert" — structural; see class KDoc.
         coVerify(exactly = 1) {
             discoveryQueueDao.updateStatus(
                 id = 7L,
